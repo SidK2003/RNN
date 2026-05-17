@@ -6,3 +6,4 @@ __pycache__
 Data\nifty50_daily.csv
 Data\.env
 Data\historical_data
+Data\*.csv
