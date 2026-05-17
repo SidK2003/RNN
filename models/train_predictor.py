@@ -377,6 +377,15 @@ def train_one_window(
                   f"Best epoch: {best_epoch} (val_loss={best_val_loss:.6f})")
             break
 
+    # After training completes, update the saved checkpoint to include the full
+    # training history (loss curves). The evaluate script needs these to detect overfitting.
+    if best_epoch >= 0 and os.path.exists(save_path):
+        checkpoint = torch.load(save_path, map_location="cpu", weights_only=False)
+        checkpoint["train_losses"] = train_losses
+        checkpoint["val_losses"] = val_losses
+        checkpoint["total_epochs"] = len(train_losses)
+        torch.save(checkpoint, save_path)
+
     return {
         "train_losses": train_losses,
         "val_losses": val_losses,
@@ -443,10 +452,10 @@ def train_stock(
 
         train_norm, test_norm, mean, std = normalize_features(train_df, test_df)
 
-        # Save normalization stats to the hard drive so the RL Agent (Stage 2) can use them later!
-        stats_dir = os.path.join(config["results_dir"], "norm_stats")
+        # Save normalization stats into per-stock subfolder
+        stats_dir = os.path.join(config["results_dir"], stock_name, "norm_stats")
         os.makedirs(stats_dir, exist_ok=True)
-        stats_path = os.path.join(stats_dir, f"{stock_name.lower()}_window{actual_idx}_stats.npz")
+        stats_path = os.path.join(stats_dir, f"window{actual_idx}_stats.npz")
         np.savez(stats_path, mean=mean.values, std=std.values, columns=NORMALIZE_COLS)
 
         train_loader, val_loader = prepare_dataloaders(
@@ -456,8 +465,8 @@ def train_stock(
         )
 
         save_path = os.path.join(
-            config["results_dir"], "models",
-            f"{stock_name.lower()}_window{actual_idx}.pt"
+            config["results_dir"], stock_name, "models",
+            f"window{actual_idx}.pt"
         )
 
         result = train_one_window(
