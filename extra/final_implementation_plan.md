@@ -355,6 +355,8 @@ Run on GPU with FP16. Search space:
 
 ## GPU Configuration (RTX 4070 Super, 12GB VRAM)
 
+**Setup:** Installed PyTorch with CUDA 12.6 via `pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126`.
+
 | Optimization | Implementation |
 |---|---|
 | **Mixed precision (FP16)** | `torch.amp.autocast('cuda')` + `GradScaler` — ~2× faster, ~50% less VRAM |
@@ -506,7 +508,7 @@ results_dir: results/
 - [x] Implement `features/vix.py` — VIX merge + `vix_available` flag
 - [x] Implement `features/pipeline.py` — end-to-end: load CSV → features → rolling z-score normalization → target column → save to `Data/processed/`
 - [ ] Implement walk-forward splitting logic (can live in `evaluation/walk_forward.py`)
-- [ ] **Verify:** no NaN in output, no look-ahead bias in normalization, correct target alignment
+- [x] **Verify:** no NaN in output, no look-ahead bias in normalization, correct target alignment
 
 ### Phase 2: Prediction Model (Days 4–8)
 - [ ] Implement `models/gru_attention.py` — `GRUAttentionModel(nn.Module)` with `get_attention_weights()` method
