@@ -1,0 +1,207 @@
+The cleanest way is to build an external events layer as a separate feature table, one row per trading day, and then merge it into your stock dataset.
+
+The goal:
+
+For each day, you want the model to know things like:
+
+was there a major global shock?
+was India in a policy/event week?
+was the market under unusual fear?
+was this a risk-off period?
+were commodity or currency shocks present?
+
+Not “read the news.” Just encode the effect of the news into numbers.
+
+1. Start with a very small feature set
+
+Do not begin with full news scraping. Start with a few high-signal, low-complexity features.
+
+Recommended first version
+A. Market regime features
+
+These are broad market condition indicators.
+
+india_vix
+vix_change_5d
+vix_sma_ratio
+nifty_return_5d or a market index proxy
+usd_inr_return_5d
+crude_oil_return_5d
+
+These help the model understand whether the market is in a calm, fearful, or stressed regime.
+
+B. Event flags
+
+These are simple 0/1 columns.
+
+rbi_policy_day
+rbi_policy_week
+fomc_day
+fomc_week
+budget_day
+budget_week
+election_month
+global_shock_window
+geopolitical_tension_window
+major_domestic_event_window
+
+These do not require sentiment analysis. They only say, “something important is happening.”
+
+C. Calendar features
+
+These are often useful and easy.
+
+day_of_week
+month
+quarter
+expiry_week
+month_end
+quarter_end
+festival_window
+
+These capture recurring behavior in markets.
+
+2. Build it as a separate events/ module
+
+Do not mix this logic into the stock feature code.
+
+A good structure would be:
+
+events/
+├── event_flags.py
+├── macro_features.py
+└── pipeline.py
+
+The pipeline would do this:
+
+Load daily stock data.
+Load daily event/macro data.
+Create event flags.
+Merge everything on date.
+Fill missing values carefully.
+Save a final daily feature file.
+3. Make an event calendar table
+
+This is the most practical design.
+
+Create a CSV like this:
+
+date	event_name	event_type	severity	scope
+2008-11-26	mumbai_attack	geopolitical	5	domestic
+2020-03-11	pandemic_crash_window	macro_shock	5	global
+2024-02-01	union_budget	policy	3	domestic
+
+Then convert it into daily flags.
+
+For example, if an event affects markets for 3 days, you can mark:
+
+event day
+1 day after
+maybe 2 days after
+
+That gives the model a short event window instead of just one day.
+
+4. Convert events into useful numeric features
+
+A single event should not just be one flag if you can do better.
+
+For each day, you can create:
+
+event_count = how many events are active
+event_severity_sum = total severity of active events
+domestic_event_flag
+global_event_flag
+policy_event_flag
+geopolitical_event_flag
+
+Example:
+
+date	event_count	severity_sum	global_event_flag	geopolitical_event_flag
+2024-06-20	2	7	1	1
+
+This is already much better than raw headlines.
+
+5. Add rolling shock features
+
+Markets often react not only to the event itself, but also to the recent event environment.
+
+So create features like:
+
+events_last_3d
+events_last_7d
+high_severity_events_last_30d
+shock_window_active
+
+This helps the model learn that markets can stay stressed for several days.
+
+6. If you want sentiment, use it as one layer, not the main layer
+
+Later, you can add:
+
+news_sentiment_daily
+stock_specific_sentiment
+market_sentiment
+global_risk_sentiment
+
+But sentiment should be one feature among many, not the whole solution.
+
+Why?
+
+Because sentiment alone is vague.
+A negative headline about oil is not the same as a negative headline about RBI, elections, war, or company earnings.
+
+7. Best practical data sources, in order of usefulness
+
+You do not need perfect news coverage from 2000 onward for a first version. Use structured sources first.
+
+Easy sources
+macro economic calendars
+RBI policy dates
+election dates
+budget dates
+US Fed dates
+crude oil prices
+USD/INR
+VIX
+NIFTY / sector index data
+Later sources
+headline archives
+news APIs
+event databases
+sentiment datasets
+NLP embeddings from articles
+8. How to handle historical consistency
+
+This is the key rule:
+
+Whatever feature you use for 2025 must also be constructible for 2005, or it must have a clear missing-value flag.
+
+Example:
+
+If you have news sentiment only from 2015 onward, then either:
+
+do not use it yet, or
+add sentiment_available = 0/1
+
+Otherwise the model learns from a distorted history.
+
+What the final table may look like
+
+For each trading day:
+
+date	stock features	macro features	event flags	sentiment	target
+2010-01-04	RSI, MACD, ATR...	VIX, USDINR, crude	budget_day=0	0.12	1
+
+This is what the GRU or RL agent sees.
+
+Very important modeling idea
+
+Do not give raw news to the RL agent first.
+
+Instead:
+
+stock model learns price behavior,
+event layer adds context,
+RL agent learns when to trust the signal.
+
+That is much more stable.

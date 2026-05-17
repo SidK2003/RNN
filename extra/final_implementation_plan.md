@@ -500,11 +500,11 @@ results_dir: results/
 ## Phased Task Checklist
 
 ### Phase 1: Data & Features (Days 1–3)
-- [ ] Create `config.yaml`
-- [ ] Create `requirements.txt` (torch, stable-baselines3, sb3-contrib, gymnasium, optuna, quantstats, pandas, numpy, matplotlib, plotly, pyyaml)
-- [ ] Implement `features/technical_indicators.py` — all indicators listed above
-- [ ] Implement `features/vix.py` — VIX merge + `vix_available` flag
-- [ ] Implement `features/pipeline.py` — end-to-end: load CSV → features → rolling z-score normalization → target column → save to `Data/processed/`
+- [x] Create `config.yaml`
+- [x] Create `requirements.txt` (torch, stable-baselines3, sb3-contrib, gymnasium, optuna, quantstats, pandas, numpy, matplotlib, plotly, pyyaml)
+- [x] Implement `features/technical_indicators.py` — all indicators listed above
+- [x] Implement `features/vix.py` — VIX merge + `vix_available` flag
+- [x] Implement `features/pipeline.py` — end-to-end: load CSV → features → rolling z-score normalization → target column → save to `Data/processed/`
 - [ ] Implement walk-forward splitting logic (can live in `evaluation/walk_forward.py`)
 - [ ] **Verify:** no NaN in output, no look-ahead bias in normalization, correct target alignment
 

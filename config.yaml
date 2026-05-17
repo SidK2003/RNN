@@ -1,0 +1,69 @@
+# ============================================
+# NIFTY 50 Deep RL Trading System — Config
+# ============================================
+
+stocks:
+  - name: RELIANCE
+    file: Data/historical_data/reliance_daily.csv
+    start_date: "2000-01-03"
+  - name: TCS
+    file: Data/historical_data/tcs_daily.csv
+    start_date: "2004-08-25"
+  - name: HDFCBANK
+    file: Data/historical_data/hdfcbank_daily.csv
+    start_date: "2003-01-01"
+  - name: HINDUNILVR
+    file: Data/historical_data/hindunilvr_daily.csv
+    start_date: "2003-01-27"
+  - name: SUNPHARMA
+    file: Data/historical_data/sunpharma_daily.csv
+    start_date: "2003-01-01"
+
+# NIFTY50 index data (bonus — not used for training in MVP)
+nifty50:
+  file: Data/historical_data/nifty50_daily.csv
+
+vix:
+  file: Data/historical_data/india_vix_daily.csv
+  available_from: "2009-03-02"
+
+walk_forward:
+  train_years: 10
+  test_years: 2
+  step_years: 2
+
+model:
+  seq_length: 60          # Optuna-tunable
+  hidden_size: 128        # Optuna-tunable
+  num_layers: 2           # Optuna-tunable
+  num_heads: 4            # Optuna-tunable
+  dropout: 0.3            # Optuna-tunable
+  learning_rate: 0.001    # Optuna-tunable
+  batch_size: 64          # Optuna-tunable
+  max_epochs: 100
+  early_stopping_patience: 10
+  mc_dropout_passes: 50
+  ensemble_count: 3       # Number of models in ensemble (1 = no ensemble)
+
+rl:
+  algorithm: MaskablePPO
+  total_timesteps: 200000
+  learning_rate: 0.0003   # Optuna-tunable
+  clip_range: 0.2         # Optuna-tunable
+  ent_coef: 0.01          # Optuna-tunable
+  n_steps: 1024           # Optuna-tunable
+  confidence_threshold: 0.6  # Optuna-tunable
+
+costs:
+  brokerage_pct: 0.001    # 0.1%
+  stt_pct: 0.0001         # 0.01% on sell
+  slippage_pct: 0.0005    # 0.05%
+
+gpu:
+  mixed_precision: true
+  gradient_accumulation_steps: 4
+  pin_memory: true
+
+seed: 42
+
+results_dir: results/
