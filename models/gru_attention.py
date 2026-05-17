@@ -71,6 +71,22 @@ class GRUAttentionModel(nn.Module):
         self.fc1 = nn.Linear(hidden_size, 64)
         self.fc2 = nn.Linear(64, 1)
 
+        self._init_weights()
+
+    def _init_weights(self):
+        """
+        Xavier (Glorot) initialization.
+        Ensures the network's weights start at a healthy mathematical scale.
+        Without this, early gradients can be too large and cause instant overfitting.
+        """
+        for name, param in self.named_parameters():
+            if 'weight_ih' in name or 'weight_hh' in name:
+                nn.init.xavier_uniform_(param)
+            elif 'bias' in name:
+                nn.init.zeros_(param)
+        nn.init.xavier_uniform_(self.fc1.weight)
+        nn.init.xavier_uniform_(self.fc2.weight)
+
     def forward(self, x: torch.Tensor, return_logits: bool = False) -> torch.Tensor:
         """
         This defines how data flows through the network.

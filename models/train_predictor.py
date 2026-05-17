@@ -259,6 +259,12 @@ def train_one_window(
         weight_decay=1e-5,
     )
 
+    # Scheduler automatically reduces the learning rate if validation loss stops improving.
+    # This prevents the model from "overshooting" useful patterns.
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=3, min_lr=1e-6
+    )
+
     # 3. Setup AMP (Fast GPU Math)
     # This uses the RTX 4070's Tensor Cores to do math in FP16 (Half Precision)
     # instead of FP32. It uses half the VRAM and is twice as fast.
@@ -308,6 +314,10 @@ def train_one_window(
 
             # Every 'accumulation_steps', tweak the brain neurons to do better next time
             if (batch_idx + 1) % accumulation_steps == 0:
+                # Gradient clipping to prevent exploding gradients
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
@@ -317,6 +327,9 @@ def train_one_window(
 
         # Handle any leftover batches
         if (batch_idx + 1) % accumulation_steps != 0:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
@@ -346,6 +359,10 @@ def train_one_window(
         train_losses.append(avg_train_loss)
         val_losses.append(avg_val_loss)
 
+        # Step the scheduler based on the validation loss
+        scheduler.step(avg_val_loss)
+        current_lr = optimizer.param_groups[0]['lr']
+
         # --- EARLY STOPPING CHECK ---
         # Did the AI get its best grade yet?
         if avg_val_loss < best_val_loss:
@@ -368,6 +385,7 @@ def train_one_window(
         if epoch % 5 == 0 or patience_counter == 0:
             marker = " ★" if patience_counter == 0 else ""
             print(f"    Epoch {epoch:3d} | "
+                  f"LR: {current_lr:.2e} | "
                   f"Train Loss: {avg_train_loss:.6f} | "
                   f"Val Loss: {avg_val_loss:.6f} | "
                   f"Patience: {patience_counter}/{patience}{marker}")
