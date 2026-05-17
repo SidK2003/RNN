@@ -33,7 +33,11 @@ RNN/
 │   ├── pipeline.py           # Main ETL orchestrator
 │   ├── technical_indicators.py # RSI, MACD, Bollinger, ATR, etc.
 │   └── vix.py                # India VIX merge logic & gap handling
-├── models/                   # Stage 1: PyTorch GRU+Attention (TODO)
+├── models/                   # Stage 1: PyTorch GRU+Attention ✅ COMPLETE
+│   ├── gru_attention.py      # GRU+MHA+MC Dropout nn.Module (return_logits mode for AMP)
+│   ├── dataset.py            # StockSequenceDataset — sliding window sequences
+│   ├── train_predictor.py    # Training loop: walk-forward, FP16, early stopping, checkpointing
+│   └── inference.py          # MC Dropout inference (T=50 passes) + model loading
 ├── rl/                       # Stage 2: Gymnasium Env & MaskablePPO (TODO)
 ├── evaluation/               # Metrics, walk-forward orchestrator, visualizations (TODO)
 ├── tuning/                   # Optuna hyperparameter searches (TODO)
@@ -43,12 +47,14 @@ RNN/
 ---
 
 ## 3. Main Entry Points & Execution Flow
-*(Currently only Stage 0 is fully implemented. The pipeline HAS been run — processed CSVs exist in `Data/processed/` for all 5 stocks.)*
+*(Stage 0 and Stage 1 code are complete. Stage 1 has been smoke-tested on RELIANCE window 0.)*
 1. **Fetch Data:** `python Data/upstox.py`
-2. **Process Features:** `python -m features.pipeline` (Reads raw CSVs, adds features & targets, saves to `Data/processed/`)
-3. **Validate Data:** `python Data/validate_data.py` (Ensures data integrity before Stage 1 — **run this next to verify**)
+2. **Process Features:** `python -m features.pipeline`
+3. **Validate Data:** `python Data/validate_data.py`
+4. **Train Stage 1 (single window):** `python -m models.train_predictor --stock RELIANCE --window 0`
+5. **Train Stage 1 (all windows):** `python -m models.train_predictor --stock RELIANCE`
 
-**Future Flow:** `evaluation/walk_forward.py` will orchestrate the full pipeline (Train Stage 1 -> Generate Out-of-Fold Predictions -> Train Stage 2 -> Test).
+**Future Flow:** `evaluation/walk_forward.py` will orchestrate the full pipeline (Train Stage 1 → Generate Out-of-Fold Predictions → Train Stage 2 → Test).
 
 ---
 
@@ -97,13 +103,13 @@ RNN/
 ## 10. Known Limitations, Edge Cases & TODOs
 - **VIX Data Gap:** India VIX data only exists post-2009. We fill pre-2009 VIX with `0.0` and use a `vix_available` binary flag so the network learns to ignore it instead of hallucinating a zero-volatility regime.
 - **TCS Data Gap:** TCS IPO'd in 2004, so it has fewer walk-forward windows than Reliance. Scripts must dynamically calculate valid walk-forward windows based on actual data availability.
-- **Pipeline Never Validated:** `python Data/validate_data.py` has NOT been run yet. The processed CSVs exist but haven't been formally verified.
+- **Pipeline Validated:** `python Data/validate_data.py` has been run and confirmed that all processed CSVs are clean (0 NaNs/Infs).
 - **TODOs (in priority order):** 
   1. ~~Build `features/` module~~ ✅ Done
-  2. ~~Run `validate_data.py` to confirm data integrity~~ ✅ Done (Validation passed for all 5 stocks)
-  3. Build `models/gru_attention.py` — the GRU+Attention+MC Dropout PyTorch model
-  4. Build `models/train_predictor.py` — training loop with FP16, early stopping
-  5. Build `models/inference.py` — MC Dropout inference (T=50 passes)
+  2. ~~Run `validate_data.py` to confirm data integrity~~ ✅ Done
+  3. ~~Build `models/gru_attention.py`~~ ✅ Done (with return_logits mode for AMP)
+  4. ~~Build `models/train_predictor.py`~~ ✅ Done (FP16, early stopping, walk-forward, checkpointing)
+  5. ~~Build `models/inference.py`~~ ✅ Done (MC Dropout T=50 + attention extraction)
   6. Build `evaluation/walk_forward.py` — the walk-forward orchestrator (normalization happens here)
   7. Build `rl/trading_env.py` — Gymnasium env with action masking
   8. Build `rl/reward.py` + `rl/train_agent.py`

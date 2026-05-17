@@ -1,6 +1,6 @@
 # NIFTY 50 Deep RL Trading System: Theory & System Design
 
-This document serves as a comprehensive summary of the project's conceptual foundation, the architectural choices, and the specific implementations completed so far. It explains *what* we are building and, more importantly, *why* we are building it this way.
+This document serves as a comprehensive summary of the project's conceptual foundation, the architectural choices, and the specific implementations completed so far. It explains *what* we are building and, more importantly, *why* we are building it this way (in simple words).
 
 ---
 
@@ -15,7 +15,7 @@ Instead of training a single monolithic RL agent to look at raw prices and make 
 
 ---
 
-## 2. Completed Implementation: Data & Feature Engineering
+## 2. Completed Implementation: Data & Feature Engineering (Stage 0)
 
 We have successfully built the entire feature engineering pipeline (`features/pipeline.py`), which processes raw OHLCV data into a state ready for Stage 1.
 
@@ -66,19 +66,30 @@ This gives us an honest assessment of how the model would have performed if depl
 
 ---
 
-## 4. Future Implementation: Stage 1 (Deep Learning Predictor)
+## 4. Completed Implementation: Stage 1 (Deep Learning Predictor)
 
-### 4.1 GRU (Gated Recurrent Unit)
-We use a GRU over an LSTM because it has fewer parameters, making it faster to train and less prone to overfitting on financial data, while still successfully capturing time-series dependencies.
+We have successfully built the Stage 1 Neural Network and its training pipeline. This lives inside the `models/` directory.
 
-### 4.2 Multi-Head Attention
-A pure GRU forces all past information into a single fixed-size hidden state (the "bottleneck" problem). By adding Multi-Head Attention, the model can look back over the entire 60-day sequence and "pay attention" directly to critical past events (e.g., a massive volume spike 45 days ago) when making today's prediction.
+### 4.1 PyTorch Dataset (`models/dataset.py`)
+Neural networks cannot process raw spreadsheets. We built a "sliding window" mechanism that chops the data into 60-day sequences. For example, it looks at Days 1-60 to predict Day 61. It then slides forward to look at Days 2-61 to predict Day 62.
 
-### 4.3 Monte Carlo (MC) Dropout for Uncertainty
+### 4.2 GRU + Multi-Head Attention (`models/gru_attention.py`)
+This is the "Brain" of the Analyst.
+*   **GRU (Gated Recurrent Unit):** Processes the 60-day sequences day-by-day, building a "memory" of the trend. It's faster and less prone to overfitting than older LSTM models.
+*   **Multi-Head Attention:** Instead of just relying on the GRU's final memory state, this mechanism allows the AI to look back over the full 60 days and assign "importance weights" to specific events (like a huge volume spike 40 days ago).
+
+### 4.3 Training Pipeline (`models/train_predictor.py`)
+This is the "Gym" where the AI learns. It automatically handles:
+*   **Walk-Forward Training:** Slices data into rolling 10-year train / 2-year test windows.
+*   **Anti-Bias Normalization:** Converts raw numbers into standard scales (Z-Scores) using *only* the training data, ensuring the AI never "looks into the future."
+*   **High-Speed AMP:** Uses the RTX 4070's Tensor Cores (Automatic Mixed Precision - FP16) to train the model twice as fast while using half the VRAM.
+*   **Early Stopping:** Prevents the AI from "memorizing" the test answers by automatically halting training if the test score stops improving.
+
+### 4.4 MC Dropout Inference (`models/inference.py`)
 Standard neural networks are notoriously overconfident. They might output $P(UP) = 0.9$ even if they have never seen a pattern before.
-*   **Theory:** By keeping Dropout *turned on* during inference and running the input through the network 50 times, we get 50 slightly different predictions.
-*   If the predictions are tightly clustered, the model has high **Confidence**.
-*   If the predictions are scattered, the model is uncertain. The RL agent can use this confidence score to avoid trading during highly uncertain regimes.
+*   **Theory:** By keeping "Dropout" (randomly turning off artificial brain cells) *turned on* during inference and running the data through the network 50 times, we get 50 slightly different predictions.
+*   If the predictions are tightly clustered (0.80, 0.81, 0.79), the model has high **Confidence**.
+*   If the predictions are scattered (0.20, 0.90, 0.50), the model is uncertain. We mathematically measure this spread (Standard Deviation) and pass it to the Stage 2 RL Agent, so it knows when to avoid trading during highly uncertain regimes.
 
 ---
 
@@ -103,5 +114,6 @@ We shape the reward to optimize for risk-adjusted returns:
 3.  **Data Extraction:** Scripts built and executed to pull 25 years of daily data for 5 major NIFTY 50 stocks + India VIX.
 4.  **Feature Pipeline:** `features/` module built. Code successfully parses OHLCV, computes 11 technical indicators, handles the VIX gap, computes the binary target, drops warm-up NaNs, and saves clean files.
 5.  **Validation Check:** `Data/validate_data.py` built to ensure 0 NaNs, 0 Infs, continuous dates, and correct schema. All 5 stocks passed.
+6.  **Stage 1 DL Predictor:** PyTorch dataset, GRU+Attention model, Walk-Forward training loop, and MC Dropout inference pipeline fully implemented and successfully smoke-tested on RELIANCE data.
 
-We are now perfectly positioned to begin coding the PyTorch neural networks in Stage 1.
+We are now perfectly positioned to begin coding the Walk-Forward prediction generator (`evaluation/walk_forward.py`) and then the Stage 2 Reinforcement Learning environment.
