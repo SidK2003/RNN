@@ -7,3 +7,4 @@ Data\nifty50_daily.csv
 Data\.env
 Data\historical_data
 Data\*.csv
+Data/historical_data/
