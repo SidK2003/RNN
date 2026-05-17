@@ -1,0 +1,7 @@
+env
+.env
+__pycache__
+*.pyc
+
+Data\nifty50_daily.csv
+Data\.env
