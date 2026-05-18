@@ -4,9 +4,10 @@ Training loop for the GRU+Attention prediction model (Stage 1).
 In simple words: This is the gym where the AI works out and gets smart.
 It handles several highly complex tasks automatically:
 1. Walk-Forward Windows: It trains the AI on 2000-2009, tests on 2010-2011, then steps forward. This prevents the AI from cheating by seeing the future.
-2. Z-Score Normalization: It converts raw stock prices/indicators into standardized scales (like bell curves) using ONLY training data, stopping "Look-Ahead Bias".
+2. RobustScaler Normalization: Uses median/IQR (more resilient to outliers than z-score) using ONLY training data, stopping "Look-Ahead Bias".
 3. AMP (Automatic Mixed Precision): Uses the RTX 4070's special Tensor Cores to train twice as fast using half-precision math (FP16).
-4. Early Stopping: If the AI stops improving on the test test, it stops training early to prevent "overfitting" (memorizing the test answers).
+4. Early Stopping: If the AI stops improving on the test set, it stops training early to prevent "overfitting" (memorizing the test answers).
+5. Boundary Handling: The last 'horizon' days of each window get their targets set to -1.0 (neutral) to prevent look-ahead leakage at window edges.
 """
 
 import os
@@ -22,6 +23,8 @@ from typing import Dict, List, Tuple, Optional
 
 from models.gru_attention import GRUAttentionModel
 from models.dataset import StockSequenceDataset
+from sklearn.preprocessing import RobustScaler
+import pickle
 
 # Fix Windows console encoding for emoji/unicode output
 if sys.platform == "win32":
@@ -63,22 +66,31 @@ def get_device() -> torch.device:
 
 
 # =============================================
-# FEATURE COLUMNS
+# DYNAMIC FEATURE SELECTION
 # =============================================
 
-# These are the columns the AI is allowed to look at.
-# We explicitly exclude 'date' (AI can't read dates directly) and 'target' (the answer key!).
-FEATURE_COLS = [
-    "open", "high", "low", "close", "volume",
-    "log_return", "bollinger_pctb", "atr", "rsi",
-    "macd", "macd_signal", "macd_histogram",
-    "stoch_k", "stoch_d", "obv", "volume_sma_ratio",
-    "india_vix", "vix_available",
-]
+# These columns are metadata or the label — never used as model inputs.
+EXCLUDE_COLS = {"date", "timestamp", "target"}
 
-# We need to normalize these so large numbers (like volume) don't overpower small numbers (like RSI).
-# We exclude 'vix_available' because it's just a 0 or 1 flag.
-NORMALIZE_COLS = [c for c in FEATURE_COLS if c != "vix_available"]
+# These are binary flags that should NOT be scaled (they're already 0/1).
+# Scaling them would destroy their meaning. (Guardrail 5)
+BINARY_FLAGS = {"vix_available"}
+
+
+def get_feature_cols(df: pd.DataFrame) -> list:
+    """
+    Dynamically infer feature columns from the CSV.
+    
+    Instead of hardcoding a list that breaks whenever we add a new feature,
+    we simply take all columns that aren't metadata or the target.
+    This is the dynamic feature selection approach (Guardrail 5).
+    """
+    return [c for c in df.columns if c not in EXCLUDE_COLS]
+
+
+def get_scale_cols(feature_cols: list) -> list:
+    """Get columns that should be normalized (everything except binary flags)."""
+    return [c for c in feature_cols if c not in BINARY_FLAGS]
 
 
 # =============================================
@@ -125,14 +137,29 @@ def compute_walk_forward_windows(
 
 
 def split_by_window(
-    df: pd.DataFrame, window: dict
+    df: pd.DataFrame, window: dict, horizon: int = 5
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Cuts the big dataset into the specific Train and Test slices for a window."""
+    """
+    Cuts the big dataset into the specific Train and Test slices for a window.
+    
+    BOUNDARY HANDLING (Guardrail 2):
+    The last 'horizon' rows of each split have their target set to -1.0 (neutral).
+    Why? Because those rows' targets were computed using close prices that fall
+    OUTSIDE this window's date range — they leak information from the next window.
+    Setting them to -1.0 means StockSequenceDataset's neutral filter will skip them.
+    """
     train_mask = (df["date"] >= window["train_start"]) & (df["date"] <= window["train_end"])
     test_mask = (df["date"] >= window["test_start"]) & (df["date"] <= window["test_end"])
 
     train_df = df[train_mask].copy().reset_index(drop=True)
     test_df = df[test_mask].copy().reset_index(drop=True)
+
+    # Mask boundary targets — these are the rows whose 5-day forward return
+    # crosses into the next time period and would leak future information.
+    if len(train_df) > horizon:
+        train_df.iloc[-horizon:, train_df.columns.get_loc("target")] = -1.0
+    if len(test_df) > horizon:
+        test_df.iloc[-horizon:, test_df.columns.get_loc("target")] = -1.0
 
     return train_df, test_df
 
@@ -144,28 +171,33 @@ def split_by_window(
 def normalize_features(
     train_df: pd.DataFrame,
     test_df: pd.DataFrame,
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
+    scale_cols: list,
+) -> Tuple[pd.DataFrame, pd.DataFrame, RobustScaler]:
     """
-    Z-score normalization: Converts data into standard deviations from the mean.
+    RobustScaler normalization: Uses median and IQR instead of mean and std.
+    
+    Why RobustScaler instead of Z-score?
+    Financial data has extreme outliers (flash crashes, circuit breakers).
+    Mean/std are heavily influenced by these outliers, causing the "normal" data
+    to be squished into a tiny range. Median/IQR are much more resilient.
     
     CRITICAL ANTI-BIAS FEATURE: 
-    We calculate the "mean" and "std" (standard deviation) using ONLY the training data.
-    Then we apply that exact same math to the test data.
-    If we used test data to calculate the mean, the AI would be "looking into the future" 
-    to see what the average price of 2011 was while still living in 2009.
+    We fit the scaler using ONLY the training data, then transform both train and test.
+    Binary flags (vix_available) are NOT scaled — they stay 0/1.
     """
-    mean = train_df[NORMALIZE_COLS].mean()
-    std = train_df[NORMALIZE_COLS].std()
-
-    # Guard against division by zero if a column is completely flat (std=0)
-    std = std.replace(0, 1.0)
+    scaler = RobustScaler()
+    
+    # Fit on training data ONLY — this is where the median/IQR are learned
+    scaler.fit(train_df[scale_cols])
 
     train_norm = train_df.copy()
     test_norm = test_df.copy()
-    train_norm[NORMALIZE_COLS] = (train_df[NORMALIZE_COLS] - mean) / std
-    test_norm[NORMALIZE_COLS] = (test_df[NORMALIZE_COLS] - mean) / std
+    
+    # Transform both train and test using the same scaler
+    train_norm[scale_cols] = scaler.transform(train_df[scale_cols])
+    test_norm[scale_cols] = scaler.transform(test_df[scale_cols])
 
-    return train_norm, test_norm, mean, std
+    return train_norm, test_norm, scaler
 
 
 # =============================================
@@ -174,6 +206,7 @@ def normalize_features(
 
 def prepare_dataloaders(
     train_df: pd.DataFrame,
+    feature_cols: list,
     seq_length: int,
     batch_size: int,
     val_split: float = 0.2,
@@ -183,7 +216,7 @@ def prepare_dataloaders(
     DataLoaders are PyTorch helpers that feed data to the GPU in small "batches" 
     (e.g., 64 sequences at a time) instead of loading the whole 10 years at once.
     """
-    features = train_df[FEATURE_COLS].values.astype(np.float32)
+    features = train_df[feature_cols].values.astype(np.float32)
     targets = train_df["target"].values.astype(np.float32)
 
     # We take the last 20% of the training data to use as a "Validation" set.
@@ -256,7 +289,7 @@ def train_one_window(
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=model_cfg["learning_rate"],
-        weight_decay=1e-5,
+        weight_decay=model_cfg.get("weight_decay", 1e-4),
     )
 
     # Scheduler automatically reduces the learning rate if validation loss stops improving.
@@ -402,6 +435,7 @@ def train_one_window(
         checkpoint["train_losses"] = train_losses
         checkpoint["val_losses"] = val_losses
         checkpoint["total_epochs"] = len(train_losses)
+        # feature_cols and scaler are saved separately by the caller (train_stock)
         torch.save(checkpoint, save_path)
 
     return {
@@ -441,8 +475,17 @@ def train_stock(
     df["date"] = pd.to_datetime(df["date"])
     print(f"  Loaded {len(df)} rows from {processed_path}")
 
+    # Dynamic feature selection — infer features from the CSV columns
+    feature_cols = get_feature_cols(df)
+    scale_cols = get_scale_cols(feature_cols)
+    print(f"  Features: {len(feature_cols)} total, {len(scale_cols)} scaled, "
+          f"{len(feature_cols) - len(scale_cols)} binary flags")
+
     windows = compute_walk_forward_windows(df, config)
     print(f"  Walk-forward windows: {len(windows)}")
+
+    # Read the target horizon for boundary handling
+    horizon = config["target"]["horizon"]
 
     if window_idx is not None:
         if window_idx >= len(windows):
@@ -453,7 +496,7 @@ def train_stock(
     results = []
     seq_length = config["model"]["seq_length"]
     batch_size = config["model"]["batch_size"]
-    num_features = len(FEATURE_COLS)
+    num_features = len(feature_cols)
 
     for i, window in enumerate(windows):
         actual_idx = window_idx if window_idx is not None else i
@@ -461,23 +504,26 @@ def train_stock(
               f"Train {window['train_start'].year}-{window['train_end'].year}, "
               f"Test {window['test_start'].year}-{window['test_end'].year} ---")
 
-        train_df, test_df = split_by_window(df, window)
+        # Split data and apply boundary handling (mask last 'horizon' targets)
+        train_df, test_df = split_by_window(df, window, horizon=horizon)
         print(f"  Train rows: {len(train_df)}, Test rows: {len(test_df)}")
 
         if len(train_df) < seq_length + 10:
             print(f"  SKIPPING — insufficient training data ({len(train_df)} rows)")
             continue
 
-        train_norm, test_norm, mean, std = normalize_features(train_df, test_df)
+        # Normalize with RobustScaler (fit on train only)
+        train_norm, test_norm, scaler = normalize_features(train_df, test_df, scale_cols)
 
-        # Save normalization stats into per-stock subfolder
+        # Save scaler for inference consistency
         stats_dir = os.path.join(config["results_dir"], stock_name, "norm_stats")
         os.makedirs(stats_dir, exist_ok=True)
-        stats_path = os.path.join(stats_dir, f"window{actual_idx}_stats.npz")
-        np.savez(stats_path, mean=mean.values, std=std.values, columns=NORMALIZE_COLS)
+        scaler_path = os.path.join(stats_dir, f"window{actual_idx}_scaler.pkl")
+        with open(scaler_path, "wb") as f:
+            pickle.dump(scaler, f)
 
         train_loader, val_loader = prepare_dataloaders(
-            train_norm, seq_length, batch_size,
+            train_norm, feature_cols, seq_length, batch_size,
             val_split=0.2,
             pin_memory=config["gpu"]["pin_memory"],
         )
@@ -495,6 +541,14 @@ def train_stock(
             device=device,
             save_path=save_path,
         )
+
+        # Save feature_cols inside the checkpoint for downstream consistency
+        # (evaluate.py and inference.py will load this to know which features to use)
+        if os.path.exists(save_path):
+            checkpoint = torch.load(save_path, map_location="cpu", weights_only=False)
+            checkpoint["feature_cols"] = feature_cols
+            checkpoint["scale_cols"] = scale_cols
+            torch.save(checkpoint, save_path)
 
         result["window_idx"] = actual_idx
         result["stock"] = stock_name

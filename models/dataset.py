@@ -5,6 +5,12 @@ Think of this file as the "Data Feeder" for our Neural Network.
 Neural Networks need data in very specific shapes (tensors). 
 This file takes our long, flat Excel-like data and chops it into overlapping "windows" 
 or "sequences" that the GRU (which processes time-series) can understand.
+
+Neutral-label filtering:
+  Sequences whose target is -1.0 (neutral zone) are excluded from training.
+  However, the underlying feature data stays contiguous — we don't delete rows.
+  We only skip certain indices when sampling. This preserves the time-series
+  continuity that the GRU needs (no gaps in the lookback window).
 """
 
 import torch
@@ -18,53 +24,77 @@ class StockSequenceDataset(Dataset):
     Creates sequences of (features, target) pairs from processed stock data.
 
     In simple words: 
-    If our seq_length is 60 (approx 3 months of trading days), this class acts like a sliding window.
-    It looks at days 0 to 59, and sets the "target" as what happened on day 60 (Did it go UP or DOWN?).
-    Then it slides one day forward: looks at days 1 to 60, and targets day 61.
+    If our seq_length is 20 (approx 1 month of trading days), this class acts like a sliding window.
+    It looks at days 0 to 19, and sets the "target" as what happened on day 19's forward return.
+    Then it slides one day forward: looks at days 1 to 20, and targets day 20's forward return.
     
-    This matches exactly how trading works in real life: you look at the past N days to predict tomorrow.
+    Sequences where the target is -1.0 (neutral / sideways move) are automatically
+    excluded from training. The model only learns from clear UP or DOWN signals.
 
     Args:
         features: NumPy array of shape (num_days, num_features). The raw numbers.
-        targets: NumPy array of shape (num_days,). The 1s (UP) and 0s (DOWN).
+        targets: NumPy array of shape (num_days,). Values: 1.0 (UP), 0.0 (DOWN), -1.0 (NEUTRAL).
         seq_length: Number of consecutive days per sequence (our "lookback" window).
+        filter_neutrals: If True (default), exclude sequences with target == -1.0.
+                         Set to False for inference where you want predictions for all dates.
     """
 
-    def __init__(self, features: np.ndarray, targets: np.ndarray, seq_length: int):
+    def __init__(self, features: np.ndarray, targets: np.ndarray, seq_length: int,
+                 filter_neutrals: bool = True):
         # We convert standard Numpy arrays into PyTorch Tensors.
         # Tensors are just arrays that can be processed by a GPU very quickly.
         self.features = torch.FloatTensor(features)
         self.targets = torch.FloatTensor(targets)
         self.seq_length = seq_length
 
-        # Calculate how many full sliding windows we can make.
-        # If we have 100 days of data and a window of 60 days, we can only make 41 windows.
-        # (days 0-59, 1-60, ... 40-99)
-        self.num_sequences = len(features) - seq_length + 1
+        # Calculate how many full sliding windows we can make from the data.
+        total_sequences = len(features) - seq_length + 1
 
         # Safety check: ensure we have enough data to form at least one sequence.
-        if self.num_sequences <= 0:
+        if total_sequences <= 0:
             raise ValueError(
                 f"Not enough data for sequences: {len(features)} rows, "
                 f"seq_length={seq_length}. Need at least {seq_length + 1} rows."
             )
 
+        # Build the list of valid sequence indices.
+        # A sequence at index 'i' uses features[i : i+seq_length] and targets[i+seq_length-1].
+        # We EXCLUDE sequences whose target is -1.0 (neutral zone) during training.
+        # The feature data is NOT modified — all rows stay in place to keep the
+        # sliding window contiguous (the GRU sees an unbroken time series).
+        if filter_neutrals:
+            self.valid_indices = [
+                i for i in range(total_sequences)
+                if targets[i + seq_length - 1] != -1.0
+            ]
+        else:
+            # For inference: include all sequences (even neutrals)
+            self.valid_indices = list(range(total_sequences))
+
+        if len(self.valid_indices) == 0:
+            raise ValueError(
+                f"No valid sequences after filtering neutrals! "
+                f"Total sequences: {total_sequences}, all were neutral."
+            )
+
     def __len__(self) -> int:
         # PyTorch needs to know exactly how many items are in this dataset.
-        return self.num_sequences
+        # This is now the count of non-neutral sequences.
+        return len(self.valid_indices)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         This is the magic function PyTorch calls when it says "Give me the 5th sample".
-        It returns the X (the past 60 days of features) and the Y (the target prediction).
+        It returns the X (the past N days of features) and the Y (the target prediction).
         """
-        # Slice the features array to get exactly 'seq_length' days starting from 'idx'.
-        # For example, if idx=0 and seq_length=60, this gets days 0 through 59.
-        x = self.features[idx : idx + self.seq_length]
+        # Map the requested index to the actual position in the contiguous data.
+        # For example, if valid_indices = [0, 1, 3, 5], then idx=2 maps to position 3.
+        actual_idx = self.valid_indices[idx]
+
+        # Slice the features array to get exactly 'seq_length' days starting from 'actual_idx'.
+        x = self.features[actual_idx : actual_idx + self.seq_length]
 
         # The target corresponds to the LAST day in our input window.
-        # target[t] = 1 if close[t+1] > close[t]. 
-        # So by looking at features up to day t, we are predicting the direction of day t+1.
-        y = self.targets[idx + self.seq_length - 1]
+        y = self.targets[actual_idx + self.seq_length - 1]
 
         return x, y

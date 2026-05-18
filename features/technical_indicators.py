@@ -61,6 +61,18 @@ def atr(high: pd.Series, low: pd.Series, close: pd.Series, window: int = 14) -> 
     return true_range.rolling(window=window).mean()
 
 
+def stock_volatility_20d(log_return_series: pd.Series, window: int = 20) -> pd.Series:
+    """
+    Rolling standard deviation of log returns over 20 days.
+    
+    Measures how volatile the stock has been recently.
+    Used to compute relative_volatility = stock_vol / nifty_vol.
+    """
+    # Simple rolling standard deviation of the stock's daily log returns.
+    # A higher value means the stock has been swinging wildly recently.
+    return log_return_series.rolling(window=window).std()
+
+
 # =============================================
 # MOMENTUM INDICATORS
 # =============================================
@@ -206,6 +218,9 @@ def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     result["log_return"] = log_return(df["close"])
     result["bollinger_pctb"] = bollinger_pctb(df["close"], window=20)
     result["atr"] = atr(df["high"], df["low"], df["close"], window=14)
+
+    # Stock's own 20-day volatility — used for relative_volatility with NIFTY
+    result["stock_volatility_20d"] = stock_volatility_20d(result["log_return"], window=20)
 
     # --- Compute Momentum Indicators ---
     result["rsi"] = rsi(df["close"], window=14)

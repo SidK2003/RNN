@@ -1,0 +1,58 @@
+stocks:
+- name: RELIANCE
+  file: Data/historical_data/reliance_daily.csv
+  start_date: '2000-01-03'
+- name: TCS
+  file: Data/historical_data/tcs_daily.csv
+  start_date: '2004-08-25'
+- name: HDFCBANK
+  file: Data/historical_data/hdfcbank_daily.csv
+  start_date: '2003-01-01'
+- name: HINDUNILVR
+  file: Data/historical_data/hindunilvr_daily.csv
+  start_date: '2003-01-27'
+- name: SUNPHARMA
+  file: Data/historical_data/sunpharma_daily.csv
+  start_date: '2003-01-01'
+nifty50:
+  file: Data/historical_data/nifty50_daily.csv
+vix:
+  file: Data/historical_data/india_vix_daily.csv
+  available_from: '2009-03-02'
+target:
+  horizon: 5
+  neutral_zone: 0.005
+walk_forward:
+  train_years: 10
+  test_years: 2
+  step_years: 2
+model:
+  seq_length: 15
+  hidden_size: 32
+  num_layers: 3
+  num_heads: 8
+  dropout: 0.5
+  learning_rate: 0.001179980797465015
+  batch_size: 32
+  max_epochs: 100
+  early_stopping_patience: 10
+  mc_dropout_passes: 50
+  ensemble_count: 3
+rl:
+  algorithm: MaskablePPO
+  total_timesteps: 200000
+  learning_rate: 0.0003
+  clip_range: 0.2
+  ent_coef: 0.01
+  n_steps: 1024
+  confidence_threshold: 0.6
+costs:
+  brokerage_pct: 0.001
+  stt_pct: 0.0001
+  slippage_pct: 0.0005
+gpu:
+  mixed_precision: true
+  gradient_accumulation_steps: 1
+  pin_memory: true
+seed: 42
+results_dir: results/

@@ -6,7 +6,8 @@ It loads every saved model checkpoint, runs it on the out-of-sample test data, a
 a huge set of metrics that tell us EXACTLY what's going right and wrong.
 
 Metrics computed:
-  - Classification: Accuracy, Precision, Recall, F1, ROC-AUC, Confusion Matrix
+  - Classification: Accuracy, Precision, Recall, F1, ROC-AUC, MCC, Balanced Accuracy
+  - Baseline: Majority-class accuracy (what you'd get by always predicting the most common class)
   - Overfitting: Train-Val loss gap, best epoch analysis
   - Prediction Distribution: Are predictions collapsed around 0.5? (bad sign)
   - Confidence Calibration: When the model says "I'm 80% confident", is it actually right 80% of the time?
@@ -37,6 +38,8 @@ from sklearn.metrics import (
     f1_score,
     roc_auc_score,
     confusion_matrix,
+    balanced_accuracy_score,
+    matthews_corrcoef,
 )
 
 from models.gru_attention import GRUAttentionModel
@@ -44,8 +47,8 @@ from models.dataset import StockSequenceDataset
 from models.inference import mc_dropout_predict
 from models.train_predictor import (
     load_config,
-    FEATURE_COLS,
-    NORMALIZE_COLS,
+    get_feature_cols,
+    get_scale_cols,
     compute_walk_forward_windows,
     split_by_window,
     normalize_features,
@@ -82,7 +85,7 @@ def evaluate_window(
     """
     model_cfg = config["model"]
     seq_length = model_cfg["seq_length"]
-    num_features = len(FEATURE_COLS)
+    horizon = config["target"]["horizon"]
 
     # --- Check if checkpoint exists ---
     checkpoint_path = os.path.join(
@@ -92,20 +95,38 @@ def evaluate_window(
         print(f"    SKIP: No checkpoint found at {checkpoint_path}")
         return None
 
-    # --- Split and normalize data ---
-    train_df, test_df = split_by_window(df, window)
+    # --- Load checkpoint first to get feature_cols ---
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    
+    # Get feature_cols from checkpoint (saved during training)
+    # This guarantees we use the exact same features the model was trained with.
+    feature_cols = checkpoint.get("feature_cols", None)
+    if feature_cols is None:
+        # Fallback for old checkpoints: infer from data
+        print(f"    WARNING: No feature_cols in checkpoint, inferring from data")
+        feature_cols = get_feature_cols(df)
+    
+    scale_cols = checkpoint.get("scale_cols", get_scale_cols(feature_cols))
+    num_features = len(feature_cols)
+
+    # --- Split and normalize data (with boundary handling) ---
+    train_df, test_df = split_by_window(df, window, horizon=horizon)
 
     if len(test_df) < seq_length + 1:
         print(f"    SKIP: Test set too small ({len(test_df)} rows)")
         return None
 
     # Normalize using ONLY training statistics (same as during training)
-    train_norm, test_norm, _, _ = normalize_features(train_df, test_df)
+    train_norm, test_norm, _ = normalize_features(train_df, test_df, scale_cols)
 
-    # --- Create test sequences ---
-    test_features = test_norm[FEATURE_COLS].values.astype(np.float32)
+    # --- Create test sequences (filter_neutrals=True to exclude boundary targets) ---
+    test_features = test_norm[feature_cols].values.astype(np.float32)
     test_targets = test_norm["target"].values.astype(np.float32)
-    test_dataset = StockSequenceDataset(test_features, test_targets, seq_length)
+    test_dataset = StockSequenceDataset(test_features, test_targets, seq_length, filter_neutrals=True)
+
+    if len(test_dataset) == 0:
+        print(f"    SKIP: No valid test sequences after filtering neutrals")
+        return None
 
     # We use a single large batch to process all test sequences at once (faster on GPU)
     all_x = torch.stack([test_dataset[i][0] for i in range(len(test_dataset))]).to(device)
@@ -120,7 +141,6 @@ def evaluate_window(
         dropout=model_cfg["dropout"],
     ).to(device)
 
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
 
     # --- 1. Standard Classification Metrics ---
@@ -174,6 +194,7 @@ def evaluate_window(
         "train_rows": len(train_df),
         "test_rows": len(test_df),
         "test_sequences": len(test_dataset),
+        "num_features": num_features,
         "training": training_info,
         "eval_mode_metrics": test_metrics,
         "mc_dropout_metrics": mc_metrics,
@@ -205,10 +226,14 @@ def compute_classification_metrics(
 
     return {
         "accuracy": float(accuracy_score(y_true, y_pred)),
+        "balanced_accuracy": float(balanced_accuracy_score(y_true, y_pred)),
+        "mcc": float(matthews_corrcoef(y_true, y_pred)),
         "precision": float(precision_score(y_true, y_pred, zero_division=0)),
         "recall": float(recall_score(y_true, y_pred, zero_division=0)),
         "f1": float(f1_score(y_true, y_pred, zero_division=0)),
         "roc_auc": auc,
+        "majority_class_baseline": float(max(y_true.mean(), 1 - y_true.mean())),
+        "accuracy_lift": float(accuracy_score(y_true, y_pred) - max(y_true.mean(), 1 - y_true.mean())),
         "confusion_matrix": {
             "true_positives": int(tp),
             "false_positives": int(fp),
@@ -339,8 +364,12 @@ def compute_aggregates(window_results: List[Dict]) -> Dict:
 
     # Extract per-window values for the MC Dropout metrics (more realistic than eval mode)
     accuracies = [w["mc_dropout_metrics"]["accuracy"] for w in window_results]
+    balanced_accs = [w["mc_dropout_metrics"]["balanced_accuracy"] for w in window_results]
+    mccs = [w["mc_dropout_metrics"]["mcc"] for w in window_results]
     aucs = [w["mc_dropout_metrics"]["roc_auc"] for w in window_results]
     f1s = [w["mc_dropout_metrics"]["f1"] for w in window_results]
+    baselines = [w["mc_dropout_metrics"]["majority_class_baseline"] for w in window_results]
+    lifts = [w["mc_dropout_metrics"]["accuracy_lift"] for w in window_results]
     gaps = [w["training"]["train_val_gap"] for w in window_results]
     best_epochs = [w["training"]["best_epoch"] for w in window_results]
     total_epochs = [w["training"]["total_epochs"] for w in window_results]
@@ -357,6 +386,14 @@ def compute_aggregates(window_results: List[Dict]) -> Dict:
             "min": float(np.min(accuracies)),
             "max": float(np.max(accuracies)),
         },
+        "balanced_accuracy": {
+            "mean": float(np.mean(balanced_accs)),
+            "std": float(np.std(balanced_accs)),
+        },
+        "mcc": {
+            "mean": float(np.mean(mccs)),
+            "std": float(np.std(mccs)),
+        },
         "roc_auc": {
             "mean": float(np.mean(aucs)),
             "std": float(np.std(aucs)),
@@ -366,6 +403,13 @@ def compute_aggregates(window_results: List[Dict]) -> Dict:
         "f1": {
             "mean": float(np.mean(f1s)),
             "std": float(np.std(f1s)),
+        },
+        "majority_baseline": {
+            "mean": float(np.mean(baselines)),
+        },
+        "accuracy_lift": {
+            "mean": float(np.mean(lifts)),
+            "std": float(np.std(lifts)),
         },
         "overfitting": {
             "mean_train_val_gap": float(np.mean(gaps)),
@@ -468,12 +512,16 @@ def evaluate_stock(stock_name: str, config: dict) -> Dict:
     print(f"EVALUATION COMPLETE: {stock_name}")
     print(f"{'=' * 70}")
     if aggregates:
-        print(f"  Mean Accuracy:  {aggregates['accuracy']['mean']:.4f} ± {aggregates['accuracy']['std']:.4f}")
-        print(f"  Mean ROC-AUC:   {aggregates['roc_auc']['mean']:.4f} ± {aggregates['roc_auc']['std']:.4f}")
-        print(f"  Mean F1:        {aggregates['f1']['mean']:.4f} ± {aggregates['f1']['std']:.4f}")
-        print(f"  Overfitting Gap: {aggregates['overfitting']['mean_train_val_gap']:.6f}")
-        print(f"  Best Window:    {aggregates['best_window']['period']} ({aggregates['best_window']['accuracy']:.4f})")
-        print(f"  Worst Window:   {aggregates['worst_window']['period']} ({aggregates['worst_window']['accuracy']:.4f})")
+        print(f"  Mean Accuracy:     {aggregates['accuracy']['mean']:.4f} ± {aggregates['accuracy']['std']:.4f}")
+        print(f"  Majority Baseline: {aggregates['majority_baseline']['mean']:.4f}")
+        print(f"  Accuracy Lift:     {aggregates['accuracy_lift']['mean']:+.4f}")
+        print(f"  Balanced Accuracy: {aggregates['balanced_accuracy']['mean']:.4f} ± {aggregates['balanced_accuracy']['std']:.4f}")
+        print(f"  MCC:               {aggregates['mcc']['mean']:.4f} ± {aggregates['mcc']['std']:.4f}")
+        print(f"  Mean ROC-AUC:      {aggregates['roc_auc']['mean']:.4f} ± {aggregates['roc_auc']['std']:.4f}")
+        print(f"  Mean F1:           {aggregates['f1']['mean']:.4f} ± {aggregates['f1']['std']:.4f}")
+        print(f"  Overfitting Gap:   {aggregates['overfitting']['mean_train_val_gap']:.6f}")
+        print(f"  Best Window:       {aggregates['best_window']['period']} ({aggregates['best_window']['accuracy']:.4f})")
+        print(f"  Worst Window:      {aggregates['worst_window']['period']} ({aggregates['worst_window']['accuracy']:.4f})")
     print(f"  Saved to: {output_path}")
 
     return report

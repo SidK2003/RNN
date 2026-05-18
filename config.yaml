@@ -27,19 +27,24 @@ vix:
   file: Data/historical_data/india_vix_daily.csv
   available_from: "2009-03-02"
 
+target:
+  horizon: 5              # predict N-day forward return
+  neutral_zone: 0.005     # ±0.5% — sideways moves labeled as neutral (-1.0)
+
 walk_forward:
   train_years: 10
   test_years: 2
   step_years: 2
 
 model:
-  seq_length: 60          # Optuna-tunable
-  hidden_size: 128        # Optuna-tunable
-  num_layers: 2           # Optuna-tunable
-  num_heads: 4            # Optuna-tunable
-  dropout: 0.3            # Optuna-tunable
-  learning_rate: 0.0001   # Optuna-tunable
-  batch_size: 64          # Optuna-tunable
+  seq_length: 15          # Optuna best (trial 12) — shorter works better for 5-day horizon
+  hidden_size: 32         # Optuna best — small but sufficient with 8 heads
+  num_layers: 3           # Optuna best — deeper GRU captures more patterns
+  num_heads: 8            # Optuna best — more attention diversity
+  dropout: 0.50           # Optuna best — heavy regularization for noisy financial data
+  learning_rate: 0.00118  # Optuna best — 10x higher than previous
+  weight_decay: 0.000794  # Optuna best — significant L2 regularization
+  batch_size: 32          # Optuna best — smaller batches for better generalization
   max_epochs: 100
   early_stopping_patience: 10
   mc_dropout_passes: 50
@@ -61,7 +66,7 @@ costs:
 
 gpu:
   mixed_precision: true
-  gradient_accumulation_steps: 4
+  gradient_accumulation_steps: 1
   pin_memory: true
 
 seed: 42

@@ -11,7 +11,7 @@
 | Data granularity | **Daily only** (MVP) |
 | Data volume | ~25 years per stock (~6,500 rows), 2000–2026 |
 | Stocks | 5 single-stock models trained independently |
-| Prediction target | **Binary direction** (UP=1, DOWN=0) — next-day close vs today's close |
+| Prediction target | **Binary direction** (UP=1, DOWN=0) — 5-day forward return with ±0.5% neutral zone |
 | Stage 1 model | GRU + Multi-Head Attention + MC Dropout (PyTorch) |
 | Stage 2 agent | MaskablePPO (sb3-contrib) |
 | Validation | Walk-forward (8 rolling windows across 25 years) |
@@ -60,8 +60,12 @@ Data is pre-downloaded via `Data/upstox.py` as CSVs. Schema:
 All features computed from raw OHLCV. Implemented in `features/` module.
 
 ### Target Variable
-- `target = 1 if close[t+1] > close[t] else 0` — binary direction of next day's close
-- This is the label for Stage 1 training
+- **5-day forward return with neutral zone**: `forward_return = (close[t+5] - close[t]) / close[t]`
+- Labels: `1.0` if `> +0.5%`, `0.0` if `< -0.5%`, `-1.0` (NEUTRAL) if in between
+- Neutral-labeled sequences are **filtered out during training** (not dropped from CSV — chronological continuity is preserved)
+- The `forward_return` intermediate column is **never saved to disk** — only `target` is kept in the CSV
+- The last `horizon` (5) rows of each walk-forward window have boundary targets set to `-1.0` to prevent leakage across train/test splits
+- Config-driven: `config.yaml` → `target.horizon` and `target.neutral_zone`
 
 ### Input Features
 
@@ -71,6 +75,7 @@ All features computed from raw OHLCV. Implemented in `features/` module.
 | log_return | `log(close[t] / close[t-1])` | — |
 | bollinger_pctb | `(close - SMA) / (2 * std)` | 20-day |
 | atr | Average True Range | 14-day |
+| stock_volatility_20d | Rolling std of `log_return` | 20-day |
 
 **Momentum:**
 | Feature | Computation | Window |
@@ -88,11 +93,22 @@ All features computed from raw OHLCV. Implemented in `features/` module.
 | obv | On-Balance Volume (cumulative) | — |
 | volume_sma_ratio | `volume / SMA(volume, 20)` | 20-day |
 
-**Macro:**
+**Macro / Market Context:**
 | Feature | Computation | Notes |
 |---|---|---|
 | india_vix | Raw India VIX value | From 2009 onwards |
-| vix_available | `1 if VIX data exists for this date, else 0` | Binary flag |
+| vix_available | `1 if VIX data exists for this date, else 0` | Binary flag — **never scaled** |
+| vix_change | Daily % change of India VIX | `0.0` when `vix_available == 0` |
+| nifty_log_return | `log(nifty_close[t] / nifty_close[t-1])` | Daily NIFTY log return |
+| nifty_log_return_5d | `log(nifty_close[t] / nifty_close[t-5])` | 5-day NIFTY log return |
+| nifty_volatility_20d | Rolling std of `nifty_log_return` | 20-day |
+| relative_strength | `log_return - nifty_log_return` | Stock vs market (both log returns) |
+| relative_volatility | `stock_volatility_20d / nifty_volatility_20d` | Stock vs market vol ratio |
+
+### Feature Selection
+- **Dynamic**: Features are inferred from CSV columns at runtime by excluding `{"date", "timestamp", "target"}`.
+- **Binary flags** (`vix_available`) are excluded from scaling but included as features.
+- The feature list is saved inside every `.pt` checkpoint to guarantee consistency across train/evaluate/inference.
 
 ### Normalization
 
@@ -101,8 +117,10 @@ All features computed from raw OHLCV. Implemented in `features/` module.
 > 
 > Every feature must be normalized using **only data available up to that point in time**. Never use future data for normalization.
 > 
-> - Use **rolling z-score**: `(x - rolling_mean) / rolling_std` with a window equal to the training window length
-> - At walk-forward boundaries: compute mean/std from **training data only**, apply those statistics to test data
+> - Use **RobustScaler** (`sklearn.preprocessing.RobustScaler`) — uses median/IQR instead of mean/std, more resilient to financial outliers
+> - Fit scaler on **training window only**, transform both train and test windows
+> - **Binary flags** (`vix_available`) are **never scaled** — they stay 0/1
+> - The fitted scaler is saved alongside the model checkpoint for inference consistency
 > - Do NOT use `sklearn.StandardScaler.fit()` on the full dataset — this leaks future statistics into the past
 
 ### NaN Handling
@@ -259,6 +277,15 @@ if action in [BUY, SELL]:
 > - The RL agent must be trained on **training data only** within each walk-forward window
 > - The Stage 1 predictions fed to the RL agent during training must come from **out-of-fold predictions** — i.e., use a validation split within the training window, not the model's predictions on its own training data (which would be overfit and unrealistically accurate)
 > - During test evaluation, use the Stage 1 model's genuine predictions on unseen test data
+
+> [!IMPORTANT]
+> **RL Impact of 5-Day Horizon (Phase 2.5 Change)**
+> 
+> The Stage 1 model now predicts 5-day returns instead of next-day. This affects the RL agent:
+> - **Holding period**: The RL reward should be evaluated over the prediction horizon (5 days), not daily. Consider using 5-day returns in the reward function.
+> - **Action frequency**: The agent should not be forced to re-evaluate every day. Consider a minimum holding period of ~5 days after entering a position.
+> - **Prediction semantics**: `P(UP)` now means "the stock will be >0.5% higher in 5 days", not "tomorrow". The confidence threshold may need adjustment.
+> - **No code changes needed yet** — these are design considerations for Phase 3 implementation.
 
 ---
 
@@ -441,19 +468,31 @@ RNN/                              # Repo root (existing)
 ```yaml
 stocks:
   - name: RELIANCE
-    file: Data/reliance_daily.csv
+    file: Data/historical_data/reliance_daily.csv
+    start_date: "2000-01-03"
   - name: TCS
-    file: Data/tcs_daily.csv
+    file: Data/historical_data/tcs_daily.csv
+    start_date: "2004-08-25"
   - name: HDFCBANK
-    file: Data/hdfcbank_daily.csv
+    file: Data/historical_data/hdfcbank_daily.csv
+    start_date: "2003-01-01"
   - name: HINDUNILVR
-    file: Data/hindunilvr_daily.csv
+    file: Data/historical_data/hindunilvr_daily.csv
+    start_date: "2003-01-27"
   - name: SUNPHARMA
-    file: Data/sunpharma_daily.csv
+    file: Data/historical_data/sunpharma_daily.csv
+    start_date: "2003-01-01"
+
+nifty50:
+  file: Data/historical_data/nifty50_daily.csv
 
 vix:
-  file: Data/india_vix_daily.csv
-  available_from: "2009-01-01"
+  file: Data/historical_data/india_vix_daily.csv
+  available_from: "2009-03-02"
+
+target:
+  horizon: 5              # predict N-day forward return
+  neutral_zone: 0.005     # ±0.5% — sideways moves labeled as neutral
 
 walk_forward:
   train_years: 10
@@ -461,12 +500,12 @@ walk_forward:
   step_years: 2
 
 model:
-  seq_length: 60          # Optuna-tunable
-  hidden_size: 128        # Optuna-tunable
-  num_layers: 2           # Optuna-tunable
-  num_heads: 4            # Optuna-tunable
-  dropout: 0.3            # Optuna-tunable
-  learning_rate: 0.001    # Optuna-tunable
+  seq_length: 20          # Optuna-tunable (reduced from 60 in v2)
+  hidden_size: 32         # Optuna-tunable (reduced from 128 in v2)
+  num_layers: 1           # Optuna-tunable (reduced from 2 in v2)
+  num_heads: 2            # Optuna-tunable (reduced from 4 in v2)
+  dropout: 0.35           # Optuna-tunable
+  learning_rate: 0.0001   # Optuna-tunable
   batch_size: 64          # Optuna-tunable
   max_epochs: 100
   early_stopping_patience: 10
@@ -489,7 +528,7 @@ costs:
 
 gpu:
   mixed_precision: true
-  gradient_accumulation_steps: 4
+  gradient_accumulation_steps: 1
   pin_memory: true
 
 seed: 42
@@ -501,24 +540,50 @@ results_dir: results/
 
 ## Phased Task Checklist
 
-### Phase 1: Data & Features (Days 1–3)
+### Phase 1: Data & Features (Days 1–3) ✅ COMPLETE
 - [x] Create `config.yaml`
 - [x] Create `requirements.txt` (torch, stable-baselines3, sb3-contrib, gymnasium, optuna, quantstats, pandas, numpy, matplotlib, plotly, pyyaml)
 - [x] Implement `features/technical_indicators.py` — all indicators listed above
 - [x] Implement `features/vix.py` — VIX merge + `vix_available` flag
-- [x] Implement `features/pipeline.py` — end-to-end: load CSV → features → rolling z-score normalization → target column → save to `Data/processed/`
-- [ ] Implement walk-forward splitting logic (can live in `evaluation/walk_forward.py`)
+- [x] Implement `features/pipeline.py` — end-to-end: load CSV → features → target column → save to `Data/processed/`
 - [x] **Verify:** no NaN in output, no look-ahead bias in normalization, correct target alignment
 
-### Phase 2: Prediction Model (Days 4–8)
-- [ ] Implement `models/gru_attention.py` — `GRUAttentionModel(nn.Module)` with `get_attention_weights()` method
-- [ ] Implement `models/train_predictor.py` — FP16 training loop, early stopping, gradient accumulation, model saving
-- [ ] Implement `models/inference.py` — MC Dropout inference (T=50 passes), ensemble averaging
-- [ ] Train on first walk-forward window, verify loss decreases, verify attention weights are extractable
-- [ ] Run full walk-forward training loop for one stock (RELIANCE)
-- [ ] **Verify:** model outputs are in [0, 1], confidence scores are meaningful, no NaN in outputs
+### Phase 2: Prediction Model (Days 4–8) ✅ COMPLETE
+- [x] Implement `models/gru_attention.py` — `GRUAttentionModel(nn.Module)` with `return_logits` mode for AMP
+- [x] Implement `models/dataset.py` — `StockSequenceDataset` sliding window
+- [x] Implement `models/train_predictor.py` — FP16 training loop, early stopping, walk-forward, checkpointing
+- [x] Implement `models/inference.py` — MC Dropout inference (T=50 passes) + model loading
+- [x] Implement `models/evaluate.py` — comprehensive post-training evaluation with classification metrics, MC Dropout analysis, confidence calibration
+- [x] Train on first walk-forward window — smoke-tested on RELIANCE window 0
 
-### Phase 3: RL Environment & Agent (Days 9–14)
+### Phase 2.5: Stage 1 Data Quality Upgrade ✅ COMPLETE
+- [x] Update `config.yaml` — add `target.horizon`, `target.neutral_zone`
+- [x] Create `features/nifty.py` — NIFTY50 loading + merge (log returns, 5d returns, 20d volatility)
+- [x] Update `features/technical_indicators.py` — add `stock_volatility_20d`
+- [x] Update `features/pipeline.py` — new target logic (5-day, neutral zone), NIFTY merge, relative features, drop `forward_return` before saving
+- [x] Update `Data/validate_data.py` — allow `-1.0` targets, dynamic schema check, neutral % report
+- [x] Re-run `python -m features.pipeline` — regenerate all CSVs
+- [x] Re-run `python Data/validate_data.py` — verify updated data
+- [x] Verify: `forward_return` does NOT appear in any processed CSV
+- [x] Update `models/dataset.py` — neutral-label filtering via `valid_indices`
+- [x] Update `models/train_predictor.py` — dynamic feature selection, RobustScaler, boundary handling, save feature list in checkpoints
+- [x] Update `models/evaluate.py` — load features from checkpoint, add MCC/balanced accuracy/majority baseline, boundary handling
+- [x] Delete old `results/` checkpoints (incompatible with new feature set)
+- [x] Smoke test: `python -m models.train_predictor --stock RELIANCE --window 0`
+- [x] Smoke test: `python -m models.evaluate --stock RELIANCE`
+- [x] Full train + evaluate across all 5 stocks
+- [x] Compare with baseline metrics — F1 and Pred Std improved, training stability improved
+
+### Phase 2.75: Hyperparameter Optimization ← CURRENT
+- [ ] Install Optuna: `pip install optuna`
+- [ ] Run HPO: `python -m tuning.optuna_search --n-trials 30`
+- [ ] Review best hyperparameters from `tuning/best_config.yaml`
+- [ ] Copy best params to `config.yaml`
+- [ ] Retrain all stocks with optimized hyperparameters
+- [ ] Re-evaluate and compare with baseline metrics
+- [ ] Confirm accuracy lift > 0 (model beats majority baseline)
+
+### Phase 3: RL Environment & Agent
 - [ ] Implement `rl/trading_env.py` — full Gymnasium env with observation/action/reward/masking
 - [ ] Implement `rl/reward.py` — Sortino-shaped reward
 - [ ] Implement `rl/train_agent.py` — MaskablePPO training with walk-forward integration
@@ -526,7 +591,8 @@ results_dir: results/
 - [ ] Train agent on first walk-forward window, verify it learns to not overtrade
 - [ ] **Verify:** action masking works (no impossible trades in trade log), transaction costs are deducted
 
-### Phase 4: Evaluation & Tuning (Days 15–18)
+### Phase 4: Evaluation & Tuning
+- [ ] Implement `evaluation/walk_forward.py` — full walk-forward orchestrator
 - [ ] Implement `evaluation/metrics.py` — all risk metrics
 - [ ] Implement `evaluation/backtest.py` — 3-way comparison runner
 - [ ] Implement `evaluation/visualise.py` — all 8 chart types listed above, saved to `results/plots/`
@@ -535,7 +601,7 @@ results_dir: results/
 - [ ] Run Optuna search (GPU, FP16)
 - [ ] Document results honestly — include where system underperforms
 
-### Phase 5: Polish (Days 19–20)
+### Phase 5: Polish
 - [ ] Write README with results summary, architecture diagram, setup instructions
 - [ ] Clean up code, add docstrings
 - [ ] Add `# TODO: Streamlit` comments at all visualisation touchpoints

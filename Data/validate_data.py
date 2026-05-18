@@ -5,11 +5,12 @@ Verifies that all processed feature files are correct and ready
 for Stage 1 training. Checks for:
 1. No NaN values
 2. No infinite values
-3. Correct column schema
-4. Target is binary (0/1)
-5. Date continuity (no large gaps)
-6. Walk-forward window feasibility
-7. Feature statistics sanity check
+3. Minimum required columns present
+4. Target is 3-class (-1.0/0.0/1.0) with no other values
+5. No forward_return column (leakage check)
+6. Date continuity (no large gaps)
+7. Walk-forward window feasibility
+8. Feature statistics sanity check
 """
 
 import os
@@ -36,20 +37,21 @@ def validate_stock(name: str, path: str, config: dict) -> dict:
     df = pd.read_csv(path)
     df["date"] = pd.to_datetime(df["date"])
     
-    # --- Schema check ---
-    expected_cols = [
+    # --- Schema check (minimum required columns) ---
+    # We use a minimum set instead of exact match because features are now dynamic
+    # (NIFTY features, relative features, etc. may be added over time)
+    required_cols = {
         "date", "open", "high", "low", "close", "volume",
-        "log_return", "bollinger_pctb", "atr", "rsi",
-        "macd", "macd_signal", "macd_histogram",
-        "stoch_k", "stoch_d", "obv", "volume_sma_ratio",
-        "india_vix", "vix_available", "target"
-    ]
-    missing = set(expected_cols) - set(df.columns)
-    extra = set(df.columns) - set(expected_cols)
+        "log_return", "rsi", "atr", "target",
+        "india_vix", "vix_available",
+    }
+    missing = required_cols - set(df.columns)
     if missing:
-        issues.append(f"MISSING columns: {missing}")
-    if extra:
-        issues.append(f"EXTRA columns (not necessarily bad): {extra}")
+        issues.append(f"MISSING required columns: {missing}")
+    
+    # GUARDRAIL 1: forward_return must NEVER appear in the processed CSV
+    if "forward_return" in df.columns:
+        issues.append("FATAL LEAKAGE: 'forward_return' column found! This contains future data.")
     
     # --- NaN check ---
     nan_count = df.isnull().sum().sum()
@@ -64,10 +66,16 @@ def validate_stock(name: str, path: str, config: dict) -> dict:
         inf_cols = np.isinf(df[numeric_cols]).sum()
         issues.append(f"Inf found: {dict(inf_cols[inf_cols > 0])}")
     
-    # --- Target check ---
+    # --- Target check (3-class: -1.0, 0.0, 1.0) ---
     unique_targets = sorted(df["target"].unique())
-    if unique_targets != [0.0, 1.0]:
-        issues.append(f"Target values unexpected: {unique_targets}")
+    valid_targets = [-1.0, 0.0, 1.0]
+    invalid_values = [t for t in unique_targets if t not in valid_targets]
+    if invalid_values:
+        issues.append(f"Target contains unexpected values: {invalid_values}")
+    
+    # Check that we have at least UP and DOWN (neutral is optional)
+    if 1.0 not in unique_targets or 0.0 not in unique_targets:
+        issues.append(f"Target missing UP or DOWN class: {unique_targets}")
     
     # --- Date continuity (flag gaps > 5 trading days) ---
     date_diffs = df["date"].diff().dt.days
@@ -125,6 +133,11 @@ def validate_stock(name: str, path: str, config: dict) -> dict:
             "max": round(col_data.max(), 4),
         }
     
+    # --- Target distribution ---
+    target_up_pct = float((df["target"] == 1.0).mean() * 100)
+    target_down_pct = float((df["target"] == 0.0).mean() * 100)
+    target_neutral_pct = float((df["target"] == -1.0).mean() * 100)
+    
     return {
         "name": name,
         "rows": len(df),
@@ -133,7 +146,9 @@ def validate_stock(name: str, path: str, config: dict) -> dict:
         "years": round(actual_years, 1),
         "walk_forward_windows": len(windows),
         "window_details": windows,
-        "target_up_pct": round(df["target"].mean() * 100, 1),
+        "target_up_pct": round(target_up_pct, 1),
+        "target_down_pct": round(target_down_pct, 1),
+        "target_neutral_pct": round(target_neutral_pct, 1),
         "issues": issues,
         "feature_stats": stats,
     }
@@ -169,7 +184,7 @@ def validate_all(config_path: str = "config.yaml"):
         print(f"\n{status} {name}")
         print(f"   Rows: {result['rows']} | Columns: {result['columns']}")
         print(f"   Date range: {result['date_range']} ({result['years']} years)")
-        print(f"   Target: {result['target_up_pct']}% UP")
+        print(f"   Target: UP={result['target_up_pct']}%, DOWN={result['target_down_pct']}%, NEUTRAL={result['target_neutral_pct']}%")
         print(f"   Walk-forward windows: {result['walk_forward_windows']}")
         
         for w in result["window_details"]:
@@ -185,6 +200,7 @@ def validate_all(config_path: str = "config.yaml"):
     else:
         print("❌ VALIDATION FAILURES DETECTED — Fix issues before proceeding")
     print(f"{'=' * 70}")
+    print("\nNOTE: Target is now 3-class (UP/DOWN/NEUTRAL). NEUTRAL sequences are filtered during training.")
 
 
 if __name__ == "__main__":
