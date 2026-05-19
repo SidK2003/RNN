@@ -34,29 +34,42 @@ RNN/
 │   ├── technical_indicators.py # RSI, MACD, Bollinger, ATR, stock_volatility_20d, etc.
 │   ├── vix.py                # India VIX merge logic & gap handling
 │   └── nifty.py              # NIFTY50 index merge — log returns, 5d returns, 20d volatility
-├── models/                   # Stage 1: PyTorch GRU+Attention — UPGRADING (Phase 2.5)
+├── models/                   # Stage 1: PyTorch GRU+Attention ✅ COMPLETE
 │   ├── gru_attention.py      # GRU+MHA+MC Dropout nn.Module (return_logits mode for AMP)
 │   ├── dataset.py            # StockSequenceDataset — sliding window with neutral-label filtering
 │   ├── train_predictor.py    # Training loop: walk-forward, FP16, RobustScaler, dynamic features
 │   ├── evaluate.py           # Post-training evaluation: accuracy, AUC, MCC, balanced accuracy, calibration
 │   └── inference.py          # MC Dropout inference (T=50 passes) + model loading
-├── rl/                       # Stage 2: Gymnasium Env & MaskablePPO (TODO)
-├── evaluation/               # Metrics, walk-forward orchestrator, visualizations (TODO)
-├── tuning/                   # Optuna hyperparameter searches (TODO)
+├── rl/                       # Stage 2: Gymnasium Env & MaskablePPO ✅ COMPLETE
+│   ├── reward.py             # Sortino-shaped asymmetric reward (losses penalized 2x)
+│   ├── trading_env.py        # Custom Gymnasium env (11-dim obs, action masking, transaction costs)
+│   └── train_agent.py        # OOF prediction generator + MaskablePPO training loop
+├── evaluation/               # Phase 4: Backtesting & Visualization (TODO)
+│   ├── walk_forward.py       # End-to-end orchestrator: Stage 1 inference → RL decisions → metrics
+│   ├── metrics.py            # Sortino, Sharpe, Max Drawdown, Calmar, Win Rate, Profit Factor
+│   ├── backtest.py           # 3-way comparison: Buy-and-Hold vs Predictor-Only vs Full RL
+│   └── visualise.py          # Equity curves, drawdown charts, trade scatter plots
+├── tuning/                   # Optuna hyperparameter searches ✅ COMPLETE
 └── dashboard/                # Post-MVP Streamlit UI (TODO)
 ```
 
 ---
 
 ## 3. Main Entry Points & Execution Flow
-*(Stage 0 and Stage 1 code are complete. Stage 1 has been smoke-tested on RELIANCE window 0.)*
-1. **Fetch Data:** `python Data/upstox.py`
-2. **Process Features:** `python -m features.pipeline`
-3. **Validate Data:** `python Data/validate_data.py`
-4. **Train Stage 1 (single window):** `python -m models.train_predictor --stock RELIANCE --window 0`
-5. **Train Stage 1 (all windows):** `python -m models.train_predictor --stock RELIANCE`
+*(Stage 0, Stage 1, and Stage 2 code are complete. Phase 4 Evaluation is next.)*
+1. **Activate Env:** `.\env\Scripts\Activate.ps1`
+2. **Fetch Data:** `python Data/upstox.py`
+3. **Process Features:** `python -m features.pipeline`
+4. **Validate Data:** `python Data/validate_data.py`
+5. **Train Stage 1 (single window):** `python -m models.train_predictor --stock RELIANCE --window 0`
+6. **Train Stage 1 (all windows):** `python -m models.train_predictor --stock RELIANCE`
+7. **Evaluate Stage 1:** `python -m models.evaluate --stock RELIANCE`
+8. **HPO Search:** `python -m tuning.optuna_search`
+9. **Train RL Agent (single window):** `python -m rl.train_agent --stock RELIANCE --window 0`
+10. **Run Backtest (upcoming):** `python -m evaluation.walk_forward --stock RELIANCE`
+11. **Run Backtest All Stocks (upcoming):** `python -m evaluation.walk_forward`
 
-**Future Flow:** `evaluation/walk_forward.py` will orchestrate the full pipeline (Train Stage 1 → Generate Out-of-Fold Predictions → Train Stage 2 → Test).
+**Pipeline orchestration:** `evaluation/walk_forward.py` will orchestrate the full end-to-end pipeline (Load data → Stage 1 inference → RL agent decisions → Metrics → Charts).
 
 ---
 
@@ -85,9 +98,15 @@ RNN/
 
 ## 7. Build, Run, Test, and Deploy Commands
 - **Activate Env (Windows):** `.\env\Scripts\Activate.ps1`
-- **Run Pipeline:** `python -m features.pipeline`
+- **Run Feature Pipeline:** `python -m features.pipeline`
 - **Validate Data:** `python Data/validate_data.py`
-*(Tests and deployment are pending further implementation)*
+- **Train Stage 1:** `python -m models.train_predictor --stock RELIANCE`
+- **Train Stage 1 (single window):** `python -m models.train_predictor --stock RELIANCE --window 0`
+- **Evaluate Stage 1:** `python -m models.evaluate --stock RELIANCE`
+- **Optuna HPO:** `python -m tuning.optuna_search`
+- **Train RL Agent:** `python -m rl.train_agent --stock RELIANCE --window 0`
+- **Full Backtest (upcoming):** `python -m evaluation.walk_forward --stock RELIANCE`
+- **Full Backtest All Stocks (upcoming):** `python -m evaluation.walk_forward`
 
 ---
 
@@ -96,6 +115,7 @@ RNN/
 - **Look-Ahead Bias Prevention:** You must obsessively guard against look-ahead bias. Never use future data to scale, normalize, or compute indicators for past data.
 - **Error Handling:** Fail fast. See `features/pipeline.py` NaN checks. If data is corrupted, raise a `ValueError` immediately rather than letting models train on garbage.
 - **Type Hinting:** Use standard Python type hints (`df: pd.DataFrame`, `-> pd.Series`) for all function signatures.
+- **Proactive Documentation:** You must update `For_AI.md`, `extra/System_Theory_and_Design.md`, and `extra/final_implementation_plan.md` at any point in time if and whenever needed to reflect the current state of the project.
 
 ---
 
@@ -112,15 +132,16 @@ RNN/
 - **TODOs (in priority order):** 
   1. ~~Build `features/` module~~ ✅ Done
   2. ~~Run `validate_data.py` to confirm data integrity~~ ✅ Done
-  3. ~~Build `models/gru_attention.py`~~ ✅ Done (with return_logits mode for AMP)
-  4. ~~Build `models/train_predictor.py`~~ ✅ Done (FP16, early stopping, walk-forward, checkpointing)
-  5. ~~Build `models/inference.py`~~ ✅ Done (MC Dropout T=50 + attention extraction)
-  6. ~~Build `models/evaluate.py`~~ ✅ Done (classification metrics, MC Dropout, confidence calibration)
-  7. **Stage 1 Data Quality Upgrade (Phase 2.5)** ← CURRENT
-     - `features/nifty.py`, updated `pipeline.py`, updated `dataset.py`, updated `train_predictor.py`, updated `evaluate.py`, updated `validate_data.py`
-  8. Build `evaluation/walk_forward.py` — the walk-forward orchestrator
-  9. Build `rl/trading_env.py` — Gymnasium env with action masking
-  10. Build `rl/reward.py` + `rl/train_agent.py`
-  11. Build `evaluation/metrics.py`, `backtest.py`, `visualise.py`, `report.py`
-  12. Optuna hyperparameter search (`tuning/optuna_search.py`)
-  13. Post-MVP Streamlit dashboard
+  3. ~~Build `models/gru_attention.py`~~ ✅ Done
+  4. ~~Build `models/train_predictor.py`~~ ✅ Done
+  5. ~~Build `models/inference.py`~~ ✅ Done
+  6. ~~Build `models/evaluate.py`~~ ✅ Done
+  7. ~~Stage 1 Data Quality Upgrade (Phase 2.5)~~ ✅ Done
+  8. ~~Optuna hyperparameter search (`tuning/optuna_search.py`)~~ ✅ Done
+  9. ~~Build `rl/trading_env.py` — Gymnasium env with action masking~~ ✅ Done
+  10. ~~Build `rl/reward.py` + `rl/train_agent.py`~~ ✅ Done
+  11. Build `evaluation/walk_forward.py` — end-to-end orchestrator ← CURRENT
+  12. Build `evaluation/metrics.py` — risk metric functions
+  13. Build `evaluation/backtest.py` — 3-way strategy comparison + quantstats tearsheet
+  14. Build `evaluation/visualise.py` — equity curves, drawdown, trade scatter
+  15. Post-MVP Streamlit dashboard

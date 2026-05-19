@@ -52,11 +52,11 @@ model:
 
 rl:
   algorithm: MaskablePPO
-  total_timesteps: 200000
+  total_timesteps: 100000
   learning_rate: 0.0003   # Optuna-tunable
   clip_range: 0.2         # Optuna-tunable
   ent_coef: 0.01          # Optuna-tunable
-  n_steps: 1024           # Optuna-tunable
+  n_steps: 512            # Must be <= 500 (approx test window)
   confidence_threshold: 0.6  # Optuna-tunable
 
 costs:

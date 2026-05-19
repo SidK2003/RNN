@@ -93,17 +93,24 @@ Standard neural networks are notoriously overconfident. They might output $P(UP)
 
 ---
 
-## 5. Future Implementation: Stage 2 (RL Agent)
+## 5. Completed Implementation: Stage 2 (RL Agent)
 
-### 5.1 Maskable PPO
-We use Reinforcement Learning to optimize the actual execution of trades. We use **Maskable PPO** (Proximal Policy Optimization).
-*   **Action Masking:** An agent shouldn't try to BUY if it already holds the stock, or SELL if it has nothing. Masking mathematically zeroes out the probabilities of these illegal actions, forcing the agent to only explore valid trades, drastically speeding up learning.
+We have successfully built the Stage 2 Reinforcement Learning agent, its environment, and the training orchestrator. This lives inside the `rl/` directory.
 
-### 5.2 The Reward Function (Sortino Optimized)
-Traditional RL bots optimize for maximum profit, which often leads to catastrophic drawdowns.
-We shape the reward to optimize for risk-adjusted returns:
-*   We penalize negative returns (losses) more heavily than we reward positive returns.
-*   We deduct **transaction costs (0.1%)**, **STT/SEBI charges**, and **slippage (0.05%)** on *every single trade step* within the environment. If the RL agent trades too much, fees will destroy its P&L. It learns to hold for the best opportunities.
+### 5.1 Trading Environment (`rl/trading_env.py`)
+This is the custom Gymnasium environment where the RL agent interacts with the market.
+*   **Observation Space (11-dim):** The agent receives the probability of an UP move (`p_up`), the `confidence` score from Stage 1, current `position`, unrealized P&L, normalized days in position, normalized India VIX, and a 5-day history of portfolio returns.
+*   **Action Space & Masking:** The agent can output HOLD (0), BUY (1), or SELL (2). We use **Maskable PPO** to mathematically zero out illegal actions (e.g., BUYing when already long, or SELLing when flat). This prevents the agent from wasting time exploring invalid trades.
+*   **Transaction Costs:** We deduct **brokerage (0.1%)**, **STT/SEBI charges (0.01%)**, and **slippage (0.05%)** during every trade directly from the portfolio. This naturally discourages overtrading without needing an artificial static penalty.
+
+### 5.2 The Reward Function (`rl/reward.py`)
+Traditional RL bots optimize for maximum profit, which often leads to catastrophic drawdowns. We shape the reward to optimize for risk-adjusted returns (Sortino-style).
+*   We penalize negative returns (losses) 2x more heavily than we reward positive returns.
+*   The reward directly reflects the portfolio's step-by-step percentage return (including transaction costs).
+
+### 5.3 OOF Training Pipeline (`rl/train_agent.py`)
+A massive risk in two-stage RL systems is training the RL agent on the same data the DL model trained on. The DL model is highly confident on its training data, causing the RL agent to learn unrealistic expectations.
+*   **Out-Of-Fold (OOF) Generation:** We split every walk-forward training window 80/20. We train a temporary Stage 1 model on the 80%, predict on the 20%, and then train the RL agent *only* on that unseen 20%. This ensures the RL agent learns how to trade on realistic, imperfect DL predictions.
 
 ---
 
@@ -114,6 +121,104 @@ We shape the reward to optimize for risk-adjusted returns:
 3.  **Data Extraction:** Scripts built and executed to pull 25 years of daily data for 5 major NIFTY 50 stocks + India VIX.
 4.  **Feature Pipeline:** `features/` module built. Code successfully parses OHLCV, computes 11 technical indicators, handles the VIX gap, computes the binary target, drops warm-up NaNs, and saves clean files.
 5.  **Validation Check:** `Data/validate_data.py` built to ensure 0 NaNs, 0 Infs, continuous dates, and correct schema. All 5 stocks passed.
-6.  **Stage 1 DL Predictor:** PyTorch dataset, GRU+Attention model, Walk-Forward training loop, and MC Dropout inference pipeline fully implemented and successfully smoke-tested on RELIANCE data.
+6.  **Stage 1 DL Predictor:** PyTorch dataset, GRU+Attention model, Walk-Forward training loop, and MC Dropout inference pipeline fully implemented. All 5 stocks fully trained and evaluated after Optuna tuning.
+7.  **Stage 2 RL Agent:** MaskablePPO agent, custom Gymnasium environment (`TradingEnv`), asymmetric Sortino reward function, and OOF (Out-Of-Fold) training pipeline built and successfully tested.
 
-We are now perfectly positioned to begin coding the Walk-Forward prediction generator (`evaluation/walk_forward.py`) and then the Stage 2 Reinforcement Learning environment.
+We are now perfectly positioned to begin Phase 4: Walk-Forward evaluation orchestrator (`evaluation/walk_forward.py`) and building a complete 3-way evaluation, backtesting, and visualization suite.
+
+---
+
+## 7. Future Implementation: Evaluation, Backtesting & Visualization (Phase 4)
+
+This is the final major phase before the polish stage. It answers the central question: *"Does this system actually make money?"*
+
+### 7.1 Walk-Forward Orchestrator (`evaluation/walk_forward.py`)
+The orchestrator ties the entire pipeline together end-to-end. For each stock × each walk-forward window, it:
+1. Loads the processed features CSV and splits by window boundaries
+2. Normalizes the test data using the **saved training-window scaler** (never refit on test data)
+3. Loads the Stage 1 model and runs MC Dropout inference (T=50) to produce `p_up` and `confidence`
+4. Assembles a test DataFrame and passes it to the backtester for strategy comparison
+5. If no RL model exists for a window, it trains one on-the-fly using `rl.train_agent`
+
+### 7.2 Three-Way Backtesting (`evaluation/backtest.py`)
+For each test window, we run three strategies on the same data:
+*   **Buy-and-Hold (Baseline):** Buy on day 1, hold until end. No transaction costs.
+*   **Predictor-Only:** Naively follow Stage 1's predictions — BUY when `p_up > 0.5`, SELL otherwise. Applies transaction costs on every trade.
+*   **Full RL System:** The trained MaskablePPO agent makes all decisions. Transaction costs are embedded in the environment.
+
+Each strategy outputs an equity curve, daily returns, a trade log, and a metrics dictionary.
+
+### 7.3 Risk Metrics (`evaluation/metrics.py`)
+Pure metric functions with no side effects:
+*   **Sortino Ratio** — Primary metric. Penalizes downside risk only.
+*   **Sharpe Ratio** — Risk-adjusted return using total volatility.
+*   **Maximum Drawdown** — Worst peak-to-trough decline.
+*   **Calmar Ratio** — Annualized return divided by max drawdown.
+*   **Win Rate** — Percentage of profitable trades.
+*   **Profit Factor** — Gross profits divided by gross losses.
+
+All annualized metrics use 250 trading days/year (Indian market convention).
+
+### 7.4 Visualization (`evaluation/visualise.py`)
+All charts saved as PNGs to `results/STOCK/plots/`:
+*   **Equity Curves** — 3 strategies overlaid per window
+*   **Drawdown Chart** — Underwater plot for the RL strategy
+*   **Metric Comparison Bars** — Side-by-side Sortino/Sharpe/MaxDD for all 3 strategies
+*   **Trade Scatter** — BUY/SELL markers overlaid on the stock's close price
+*   **Aggregate Summary Table** — Average metrics across all windows per stock
+
+---
+
+## 6. How to Run the System (Commands)
+
+To execute different parts of the NIFTY 50 Deep RL Trading System, use the following commands from the root directory (`d:\2_Antigravity\RNN`):
+
+### 6.1 Setup & Environment
+Activate the Python virtual environment (PowerShell):
+```powershell
+.\env\Scripts\Activate.ps1
+```
+
+### 6.2 Data Processing & Validation
+Generate features from raw data:
+```powershell
+python -m features.pipeline
+```
+Validate the integrity of the processed data:
+```powershell
+python -m data.validate_data
+```
+
+### 6.3 Stage 1: Deep Learning Predictor
+Train the GRU+Attention model for a specific stock (e.g., RELIANCE):
+```powershell
+python -m models.train_predictor --stock RELIANCE
+```
+Run hyperparameter optimization via Optuna:
+```powershell
+python -m tuning.optuna_search
+```
+Evaluate the trained Stage 1 models (calculates accuracy, MCC, etc.):
+```powershell
+python -m models.evaluate --stock RELIANCE
+```
+
+### 6.4 Stage 2: Reinforcement Learning Agent
+Train the RL Agent using Out-Of-Fold predictions for a specific stock and window (e.g., RELIANCE, Window 0):
+```powershell
+python -m rl.train_agent --stock RELIANCE --window 0
+```
+
+### 6.5 Evaluation & Backtesting (Phase 4 — Upcoming)
+Run the full walk-forward evaluation for a stock:
+```powershell
+python -m evaluation.walk_forward --stock RELIANCE
+```
+Run evaluation for a specific window:
+```powershell
+python -m evaluation.walk_forward --stock RELIANCE --window 0
+```
+Run evaluation for all stocks:
+```powershell
+python -m evaluation.walk_forward
+```

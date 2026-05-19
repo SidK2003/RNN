@@ -295,9 +295,9 @@ if action in [BUY, SELL]:
 
 For each walk-forward test window, run three strategies on the same test data:
 
-1. **Buy-and-Hold:** Buy on day 1, hold until end. Baseline.
-2. **Predictor-Only:** BUY when P(UP) > 0.5, SELL otherwise. No RL agent.
-3. **Full System (LSTM+RL):** Stage 1 prediction → Stage 2 RL agent decision.
+1. **Buy-and-Hold:** Buy on day 1, hold until end. Baseline. No transaction costs.
+2. **Predictor-Only:** BUY when P(UP) > 0.5 AND confidence > threshold, SELL otherwise. Transaction costs applied.
+3. **Full System (GRU+RL):** Stage 1 prediction → Stage 2 RL agent decision. Transaction costs embedded in env.
 
 ### Risk Metrics (per strategy, per window, and aggregated)
 
@@ -327,6 +327,8 @@ All metrics must be visualised as graphs/charts:
 8. **quantstats HTML tearsheet** — full report saved to `results/tearsheets/`
 
 > [!NOTE]
+> `report.py` from the original plan is **merged into `backtest.py`** — quantstats tearsheet generation is a single function call, not worth a separate module.
+> Attention heatmaps and confidence distribution charts are Stage 1 diagnostics already covered in `models/evaluate.py`.
 > Add `# TODO: Streamlit integration` comments next to all visualisation functions. These will later be connected to the dashboard's 3 tabs.
 
 ---
@@ -439,11 +441,10 @@ RNN/                              # Repo root (existing)
 │
 ├── evaluation/
 │   ├── __init__.py
-│   ├── walk_forward.py           # Orchestrates full walk-forward loop (train → predict → RL → evaluate)
+│   ├── walk_forward.py           # Orchestrates full walk-forward loop (load data → Stage 1 inference → RL → evaluate)
 │   ├── metrics.py                # Sortino, Sharpe, drawdown, Calmar, win rate, profit factor
-│   ├── backtest.py               # Runs 3-way comparison (buy-hold vs predictor-only vs full system)
-│   ├── visualise.py              # All charts: equity curves, drawdowns, attention maps, trade scatter
-│   └── report.py                 # quantstats HTML tearsheet generation
+│   ├── backtest.py               # Runs 3-way comparison + quantstats HTML tearsheet generation
+│   └── visualise.py              # All charts: equity curves, drawdowns, trade scatter, metric bars
 │
 ├── tuning/
 │   ├── __init__.py
@@ -574,32 +575,31 @@ results_dir: results/
 - [x] Full train + evaluate across all 5 stocks
 - [x] Compare with baseline metrics — F1 and Pred Std improved, training stability improved
 
-### Phase 2.75: Hyperparameter Optimization ← CURRENT
-- [ ] Install Optuna: `pip install optuna`
-- [ ] Run HPO: `python -m tuning.optuna_search --n-trials 30`
-- [ ] Review best hyperparameters from `tuning/best_config.yaml`
-- [ ] Copy best params to `config.yaml`
-- [ ] Retrain all stocks with optimized hyperparameters
-- [ ] Re-evaluate and compare with baseline metrics
-- [ ] Confirm accuracy lift > 0 (model beats majority baseline)
+### Phase 2.75: Hyperparameter Optimization ✅ COMPLETE
+- [x] Install Optuna: `pip install optuna`
+- [x] Run HPO: `python -m tuning.optuna_search --n-trials 30`
+- [x] Review best hyperparameters from `tuning/best_config.yaml`
+- [x] Copy best params to `config.yaml`
+- [x] Retrain all stocks with optimized hyperparameters
+- [x] Re-evaluate and compare with baseline metrics
+- [x] Confirm accuracy lift > 0 (model beats majority baseline)
 
-### Phase 3: RL Environment & Agent
-- [ ] Implement `rl/trading_env.py` — full Gymnasium env with observation/action/reward/masking
-- [ ] Implement `rl/reward.py` — Sortino-shaped reward
-- [ ] Implement `rl/train_agent.py` — MaskablePPO training with walk-forward integration
-- [ ] **Critical:** ensure RL trains on out-of-fold Stage 1 predictions (not overfit training predictions)
-- [ ] Train agent on first walk-forward window, verify it learns to not overtrade
-- [ ] **Verify:** action masking works (no impossible trades in trade log), transaction costs are deducted
+### Phase 3: RL Environment & Agent ✅ COMPLETE
+- [x] Implement `rl/trading_env.py` — full Gymnasium env with 11-dim observation/action/reward/masking
+- [x] Implement `rl/reward.py` — Sortino-shaped asymmetric reward (losses penalized 2x, no explicit overtrading penalty)
+- [x] Implement `rl/train_agent.py` — MaskablePPO training with OOF data generation (80/20 split within training window)
+- [x] **Critical:** RL trains on out-of-fold Stage 1 predictions (not overfit training predictions)
+- [x] Train agent on first walk-forward window — smoke-tested on RELIANCE window 0
+- [x] **Verified:** action masking works (no impossible trades), transaction costs are deducted
 
-### Phase 4: Evaluation & Tuning
-- [ ] Implement `evaluation/walk_forward.py` — full walk-forward orchestrator
-- [ ] Implement `evaluation/metrics.py` — all risk metrics
-- [ ] Implement `evaluation/backtest.py` — 3-way comparison runner
-- [ ] Implement `evaluation/visualise.py` — all 8 chart types listed above, saved to `results/plots/`
-- [ ] Implement `evaluation/report.py` — quantstats tearsheet
-- [ ] Run full pipeline for all 5 stocks across all 8 walk-forward windows
-- [ ] Run Optuna search (GPU, FP16)
-- [ ] Document results honestly — include where system underperforms
+### Phase 4: Evaluation & Visualization ← CURRENT
+- [ ] Implement `evaluation/metrics.py` — all risk metrics (Sortino, Sharpe, MaxDD, Calmar, Win Rate, Profit Factor)
+- [ ] Implement `evaluation/backtest.py` — 3-way comparison runner (Buy-Hold, Predictor-Only, Full RL) + quantstats tearsheet
+- [ ] Implement `evaluation/visualise.py` — equity curves, drawdown charts, trade scatter, metric bars, aggregate summary
+- [ ] Implement `evaluation/walk_forward.py` — full walk-forward orchestrator (loads data, runs Stage 1 inference, runs RL, calls backtest + visualise)
+- [ ] Run full pipeline for RELIANCE across all 8 walk-forward windows (smoke test)
+- [ ] Run full pipeline for all 5 stocks across all windows
+- [ ] Review results honestly — document where system underperforms vs Buy-and-Hold
 
 ### Phase 5: Polish
 - [ ] Write README with results summary, architecture diagram, setup instructions
