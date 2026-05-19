@@ -12,6 +12,7 @@ Data/historical_data/
 Data/.env
 Data/processed/
 .env
+Data/historical_data_1min/
 
 # Notebooks checkpoints
 .ipynb_checkpoints/
