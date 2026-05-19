@@ -1,4 +1,4 @@
-# Phase 3: RL Environment & Agent — Technical Review & Revised Pla
+# Phase 3: RL Environment & Agent — Technical Review & Revised Plan
 
 ## Current State (Confirmed)
 
