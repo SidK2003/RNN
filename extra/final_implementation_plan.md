@@ -592,16 +592,16 @@ results_dir: results/
 - [x] Train agent on first walk-forward window — smoke-tested on RELIANCE window 0
 - [x] **Verified:** action masking works (no impossible trades), transaction costs are deducted
 
-### Phase 4: Evaluation & Visualization ← CURRENT
-- [ ] Implement `evaluation/metrics.py` — all risk metrics (Sortino, Sharpe, MaxDD, Calmar, Win Rate, Profit Factor)
-- [ ] Implement `evaluation/backtest.py` — 3-way comparison runner (Buy-Hold, Predictor-Only, Full RL) + quantstats tearsheet
-- [ ] Implement `evaluation/visualise.py` — equity curves, drawdown charts, trade scatter, metric bars, aggregate summary
-- [ ] Implement `evaluation/walk_forward.py` — full walk-forward orchestrator (loads data, runs Stage 1 inference, runs RL, calls backtest + visualise)
-- [ ] Run full pipeline for RELIANCE across all 8 walk-forward windows (smoke test)
-- [ ] Run full pipeline for all 5 stocks across all windows
-- [ ] Review results honestly — document where system underperforms vs Buy-and-Hold
+### Phase 4: Evaluation & Visualization ✅ COMPLETE
+- [x] Implement `evaluation/metrics.py` — all risk metrics (Sortino, Sharpe, MaxDD, Calmar, Win Rate, Profit Factor)
+- [x] Implement `evaluation/backtest.py` — 3-way comparison runner (Buy-Hold, Predictor-Only, Full RL) + quantstats tearsheet
+- [x] Implement `evaluation/visualise.py` — equity curves, drawdown charts, trade scatter, metric bars, aggregate summary
+- [x] Implement `evaluation/walk_forward.py` — full walk-forward orchestrator (loads data, runs Stage 1 inference, runs RL, calls backtest + visualise)
+- [x] Run full pipeline for RELIANCE across all 8 walk-forward windows (smoke test)
+- [x] Run full pipeline for all 5 stocks across all windows
+- [x] Review results honestly — document where system underperforms vs Buy-and-Hold
 
-### Phase 5: Polish
+### Phase 5: Polish ← CURRENT
 - [ ] Write README with results summary, architecture diagram, setup instructions
 - [ ] Clean up code, add docstrings
 - [ ] Add `# TODO: Streamlit` comments at all visualisation touchpoints

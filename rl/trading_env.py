@@ -46,6 +46,10 @@ class TradingEnv(gym.Env):
         self.stt = config["costs"]["stt_pct"]
         self.slippage = config["costs"]["slippage_pct"]
         
+        # RL Config
+        rl_cfg = config.get("rl", {})
+        self.conf_threshold = rl_cfg.get("confidence_threshold", 0.6)
+        
         # Action Space: 0=HOLD, 1=BUY, 2=SELL
         self.action_space = spaces.Discrete(3)
         
@@ -128,9 +132,10 @@ class TradingEnv(gym.Env):
         next_price = self.df.loc[self.current_step, "close"]
         
         # 3. Calculate new portfolio value based on price movement
+        daily_stock_return = (next_price - current_price) / current_price
+        
         if self.position == 1:
             # Portfolio value scales with the daily return of the stock
-            daily_stock_return = (next_price - current_price) / current_price
             self.portfolio_value *= (1 + daily_stock_return)
             self.days_in_position += 1
 
@@ -138,7 +143,21 @@ class TradingEnv(gym.Env):
         daily_return = (self.portfolio_value - prev_portfolio_value) / prev_portfolio_value
         self.history_returns[self.current_step] = daily_return
         
-        reward = compute_step_reward(daily_return)
+        # Get Stage 1 predictions for the CURRENT step to pass to the reward function
+        # (This is what the agent was looking at when it made the decision)
+        current_row = self.df.loc[self.current_step - 1]
+        p_up = current_row["p_up"]
+        confidence = current_row["confidence"]
+        
+        reward = compute_step_reward(
+            daily_return=daily_return,
+            position=self.position,
+            p_up=p_up,
+            confidence=confidence,
+            actual_stock_return=daily_stock_return,
+            action=action,
+            conf_threshold=self.conf_threshold
+        )
 
         # 5. Check Termination
         terminated = self.current_step >= self.max_steps

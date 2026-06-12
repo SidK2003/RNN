@@ -20,8 +20,11 @@ RNN/
 ├── config.yaml               # Central hyperparameter, path, and config registry
 ├── requirements.txt          # Python dependencies
 ├── For_AI.md                 # (This File) AI onboarding guide
+├── CLAUDE.md                 # Claude Code guidance (commands, architecture, invariants)
+├── SUGGESTIONS.md            # Senior-engineer review: prioritized improvements roadmap
 ├── extra/
 │   ├── final_implementation_plan.md # The COMPLETE, detailed phase-by-phase implementation plan and specifications.
+│   ├── phase_4_implementation_plan.md # Phase 4 (evaluation) design doc + deviations from original plan
 │   ├── System_Theory_and_Design.md  # Theory explanation behind the chosen architecture
 │   └── external_events.txt          # Future plan for macro/event features (NOT yet implemented)
 ├── Data/
@@ -44,10 +47,10 @@ RNN/
 │   ├── reward.py             # Sortino-shaped asymmetric reward (losses penalized 2x)
 │   ├── trading_env.py        # Custom Gymnasium env (11-dim obs, action masking, transaction costs)
 │   └── train_agent.py        # OOF prediction generator + MaskablePPO training loop
-├── evaluation/               # Phase 4: Backtesting & Visualization (TODO)
+├── evaluation/               # Phase 4: Backtesting & Visualization ✅ COMPLETE
 │   ├── walk_forward.py       # End-to-end orchestrator: Stage 1 inference → RL decisions → metrics
 │   ├── metrics.py            # Sortino, Sharpe, Max Drawdown, Calmar, Win Rate, Profit Factor
-│   ├── backtest.py           # 3-way comparison: Buy-and-Hold vs Predictor-Only vs Full RL
+│   ├── backtest.py           # 3-way comparison: Buy-and-Hold vs Predictor-Only vs Full RL + quantstats tearsheet
 │   └── visualise.py          # Equity curves, drawdown charts, trade scatter plots
 ├── tuning/                   # Optuna hyperparameter searches ✅ COMPLETE
 └── dashboard/                # Post-MVP Streamlit UI (TODO)
@@ -56,7 +59,7 @@ RNN/
 ---
 
 ## 3. Main Entry Points & Execution Flow
-*(Stage 0, Stage 1, and Stage 2 code are complete. Phase 4 Evaluation is next.)*
+*(Stage 0, Stage 1, Stage 2, and Phase 4 Evaluation code are all complete. Post-MVP Streamlit dashboard is next.)*
 1. **Activate Env:** `.\env\Scripts\Activate.ps1`
 2. **Fetch Data:** `python Data/upstox.py`
 3. **Process Features:** `python -m features.pipeline`
@@ -66,10 +69,10 @@ RNN/
 7. **Evaluate Stage 1:** `python -m models.evaluate --stock RELIANCE`
 8. **HPO Search:** `python -m tuning.optuna_search`
 9. **Train RL Agent (single window):** `python -m rl.train_agent --stock RELIANCE --window 0`
-10. **Run Backtest (upcoming):** `python -m evaluation.walk_forward --stock RELIANCE`
-11. **Run Backtest All Stocks (upcoming):** `python -m evaluation.walk_forward`
+10. **Run Backtest:** `python -m evaluation.walk_forward --stock RELIANCE`
+11. **Run Backtest All Stocks:** `python -m evaluation.walk_forward`
 
-**Pipeline orchestration:** `evaluation/walk_forward.py` will orchestrate the full end-to-end pipeline (Load data → Stage 1 inference → RL agent decisions → Metrics → Charts).
+**Pipeline orchestration:** `evaluation/walk_forward.py` orchestrates the full end-to-end pipeline (Load data → Stage 1 inference → RL agent decisions → Metrics → Charts → JSON results). If a window's RL model is missing, it is trained on the fly and cached (`results/STOCK/models/rl_windowN.zip`).
 
 ---
 
@@ -105,8 +108,8 @@ RNN/
 - **Evaluate Stage 1:** `python -m models.evaluate --stock RELIANCE`
 - **Optuna HPO:** `python -m tuning.optuna_search`
 - **Train RL Agent:** `python -m rl.train_agent --stock RELIANCE --window 0`
-- **Full Backtest (upcoming):** `python -m evaluation.walk_forward --stock RELIANCE`
-- **Full Backtest All Stocks (upcoming):** `python -m evaluation.walk_forward`
+- **Full Backtest:** `python -m evaluation.walk_forward --stock RELIANCE`
+- **Full Backtest All Stocks:** `python -m evaluation.walk_forward`
 
 ---
 
@@ -116,6 +119,7 @@ RNN/
 - **Error Handling:** Fail fast. See `features/pipeline.py` NaN checks. If data is corrupted, raise a `ValueError` immediately rather than letting models train on garbage.
 - **Type Hinting:** Use standard Python type hints (`df: pd.DataFrame`, `-> pd.Series`) for all function signatures.
 - **Proactive Documentation:** You must update `For_AI.md`, `extra/System_Theory_and_Design.md`, and `extra/final_implementation_plan.md` at any point in time if and whenever needed to reflect the current state of the project.
+- **Staged Execution:** If an implementation plan is large (multiple files or complex logic), ALWAYS execute it in stages rather than trying to do everything at once. Break the work into logical chunks, complete each chunk fully (write code, test, verify), and then move to the next. This prevents overwhelming the context window and avoids hitting output token limits.
 
 ---
 
@@ -140,8 +144,8 @@ RNN/
   8. ~~Optuna hyperparameter search (`tuning/optuna_search.py`)~~ ✅ Done
   9. ~~Build `rl/trading_env.py` — Gymnasium env with action masking~~ ✅ Done
   10. ~~Build `rl/reward.py` + `rl/train_agent.py`~~ ✅ Done
-  11. Build `evaluation/walk_forward.py` — end-to-end orchestrator ← CURRENT
-  12. Build `evaluation/metrics.py` — risk metric functions
-  13. Build `evaluation/backtest.py` — 3-way strategy comparison + quantstats tearsheet
-  14. Build `evaluation/visualise.py` — equity curves, drawdown, trade scatter
-  15. Post-MVP Streamlit dashboard
+  11. ~~Build `evaluation/walk_forward.py` — end-to-end orchestrator~~ ✅ Done
+  12. ~~Build `evaluation/metrics.py` — risk metric functions~~ ✅ Done
+  13. ~~Build `evaluation/backtest.py` — 3-way strategy comparison + quantstats tearsheet~~ ✅ Done
+  14. ~~Build `evaluation/visualise.py` — equity curves, drawdown, trade scatter~~ ✅ Done
+  15. Post-MVP Streamlit dashboard ← CURRENT

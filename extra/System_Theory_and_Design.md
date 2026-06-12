@@ -123,14 +123,15 @@ A massive risk in two-stage RL systems is training the RL agent on the same data
 5.  **Validation Check:** `Data/validate_data.py` built to ensure 0 NaNs, 0 Infs, continuous dates, and correct schema. All 5 stocks passed.
 6.  **Stage 1 DL Predictor:** PyTorch dataset, GRU+Attention model, Walk-Forward training loop, and MC Dropout inference pipeline fully implemented. All 5 stocks fully trained and evaluated after Optuna tuning.
 7.  **Stage 2 RL Agent:** MaskablePPO agent, custom Gymnasium environment (`TradingEnv`), asymmetric Sortino reward function, and OOF (Out-Of-Fold) training pipeline built and successfully tested.
+8.  **Stage 3 Evaluation Pipeline:** Walk-forward orchestrator (`evaluation/walk_forward.py`), 3-way backtester, risk metrics calculator, and full visualisation suite successfully built. End-to-end integration tested.
 
-We are now perfectly positioned to begin Phase 4: Walk-Forward evaluation orchestrator (`evaluation/walk_forward.py`) and building a complete 3-way evaluation, backtesting, and visualization suite.
+We are now in Phase 5: Polish & Streamlit Dashboard.
 
 ---
 
-## 7. Future Implementation: Evaluation, Backtesting & Visualization (Phase 4)
+## 7. Evaluation, Backtesting & Visualization (Phase 4)
 
-This is the final major phase before the polish stage. It answers the central question: *"Does this system actually make money?"*
+This phase answers the central question: *"Does this system actually make money?"*
 
 ### 7.1 Walk-Forward Orchestrator (`evaluation/walk_forward.py`)
 The orchestrator ties the entire pipeline together end-to-end. For each stock × each walk-forward window, it:
@@ -169,7 +170,26 @@ All charts saved as PNGs to `results/STOCK/plots/`:
 
 ---
 
+## 8. Future Implementation: Polish & Streamlit Dashboard (Phase 5)
+
+This is the final phase to make the project presentable and interactive.
+
+### 8.1 Streamlit Dashboard (`dashboard/app.py`)
+An interactive dashboard to explore the results:
+*   **Backtest Viewer** — Dropdowns for Stock and Window to view equity curves and trade scatter plots interactively.
+*   **Metrics Scorecard** — Display the JSON metric results in clean UI tables.
+*   **Signal Explorer** — View Stage 1 DL predictions (p_up, confidence) vs actual price movements.
+
+### 8.2 Polish
+*   Comprehensive README.md with architecture diagrams and setup instructions.
+*   Code cleanup and docstring verification.
+*   Final end-to-end execution across all 5 stocks for all windows to generate the ultimate report.
+
+---
+
 ## 6. How to Run the System (Commands)
+
+(IMP: This section always needs to be updated whenever the code is updated with new features, model, phases, etc.)
 
 To execute different parts of the NIFTY 50 Deep RL Trading System, use the following commands from the root directory (`d:\2_Antigravity\RNN`):
 

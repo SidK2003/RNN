@@ -3,8 +3,8 @@ Train the Stage 2 Reinforcement Learning Agent.
 
 In simple words: 
 This script trains the RL agent (MaskablePPO) using "Out-Of-Fold" (OOF) predictions.
-It takes a 10-year training window, splits it into 80/20.
-It trains the Stage 1 model on the 80%, makes predictions on the 20%, 
+It takes a 10-year training window, splits it into 70/30.
+It trains the Stage 1 model on the 70%, makes predictions on the 30%, 
 and gives those predictions to the RL agent to learn how to trade.
 """
 
@@ -62,10 +62,10 @@ def generate_oof_predictions(stock_name: str, window_idx: int, config: dict, df:
     Generates Out-Of-Fold (OOF) predictions for the RL agent to train on.
     
     1. Takes the train portion of the current walk-forward window.
-    2. Splits that train portion into 80% sub-train, 20% sub-val.
-    3. Trains a fresh Stage 1 model on the 80%.
-    4. Predicts on the 20%.
-    5. Returns a DataFrame of [date, close, india_vix, p_up, confidence] for the 20%.
+    2. Splits that train portion into 70% sub-train, 30% sub-val.
+    3. Trains a fresh Stage 1 model on the 70%.
+    4. Predicts on the 30%.
+    5. Returns a DataFrame of [date, close, india_vix, p_up, confidence] for the 30%.
     """
     print(f"\n--- Generating OOF Data for {stock_name} Window {window_idx} ---")
     
@@ -79,8 +79,8 @@ def generate_oof_predictions(stock_name: str, window_idx: int, config: dict, df:
     # 1. Get the main training data for this window
     train_df, _ = split_by_window(df, window, horizon=horizon)
     
-    # 2. Split it 80/20 chronologically
-    split_idx = int(len(train_df) * 0.8)
+    # 2. Split it 70/30 chronologically
+    split_idx = int(len(train_df) * 0.7)
     sub_train_df = train_df.iloc[:split_idx].copy()
     sub_val_df = train_df.iloc[split_idx:].copy()
     
